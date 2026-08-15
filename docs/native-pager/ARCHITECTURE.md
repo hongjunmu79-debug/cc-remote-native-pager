@@ -34,6 +34,12 @@ WebView chat                  Kotlin StateFlow
                               Compose Pager UI
 ```
 
+`MainActivity` owns a native `FrameLayout`: the WebView is its direct base
+child and the Compose dashboard is an opaque sibling layer. Dashboard mode
+shows the Compose layer and disables WebView input; chat mode marks the Compose
+layer `GONE`. This preserves the proven cc-remote WebView rendering path and
+avoids `AndroidView`/Compose compositor defects on legacy vendor WebViews.
+
 The web client publishes a bounded projection, never raw transcript/tool
 payloads. Native commands are a small allow-list and are executed through the
 existing `RelayWs` instance. The APK does not hold relay credentials.
@@ -58,8 +64,11 @@ existing `RelayWs` instance. The APK does not hold relay credentials.
 - Snapshot heartbeat every 15 seconds and native freshness timeout.
 - At most 64 tasks, 16 subagents per task, and 256 KiB per bridge frame.
 - Commands are idempotently acknowledged by command ID.
-- The WebView stays attached while the native dashboard is visible so auth and
-  WebSocket state are not recreated when switching views.
+- One Activity-owned WebView remains alive while the native dashboard is
+  visible, so cookies, JavaScript state, and the WebSocket bridge are not
+  duplicated. The Compose layer never owns or destroys it.
+- Chromium 90 vendor builds receive one authenticated same-page reload when
+  chat is revealed. Current WebViews keep their live surface without reload.
 - Native state is a projection only. Reloading the page rebuilds it from the
   authoritative web reducer.
 

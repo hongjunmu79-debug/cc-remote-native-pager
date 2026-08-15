@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
+import { Markdown } from "./Markdown";
 import type { Artifact, PreviewAssetState } from "../reducer";
 import { Icon } from "../icons";
 import { PanelTabs } from "./PanelTabs";
@@ -572,8 +572,8 @@ export function ArtifactPanel({ artifact, active, hasBtw, onTab, onClose,
                     draft: event.currentTarget.value,
                     baseline: editor.baseline,
                   })} />
-              : <div className="prose markdown-preview"><ReactMarkdown
-                  remarkPlugins={[remarkGfm]} components={markdownComponents}>{editor.draft}</ReactMarkdown></div>}
+              : <div className="prose markdown-preview"><Markdown
+                  components={markdownComponents}>{editor.draft}</Markdown></div>}
           </>
         ) : null}
       </div>

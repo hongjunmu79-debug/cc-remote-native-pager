@@ -25,9 +25,13 @@
 ## Physical-device acceptance
 
 - Login, cookie retention, and relaunch.
-- Dashboard/chat switching without WebSocket reconnect.
+- Dashboard/chat switching without duplicate WebView or bridge ownership;
+  current WebViews keep the live surface and Chromium 90 uses its bounded
+  reveal reload.
 - Five simultaneous sessions and background activity updates.
 - Answer and interrupt commands, including command rejection.
 - Network loss/recovery and stale-bridge indication.
 - 30-minute animation/battery/thermal observation.
 - Old Android System WebView compatibility.
+- Android Back returns from chat to the native dashboard (with standard IME
+  dismissal taking precedence while the keyboard owns Back).

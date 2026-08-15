@@ -30,6 +30,10 @@ class SecureWebViewController(
     val webView: WebView = WebView(activity)
     private var endpoint = initialEndpoint
     private var bridgeInstalled = false
+    private var chatVisible = true
+    private val reloadAfterReveal = requiresReloadAfterReveal(
+        WebViewCompat.getCurrentWebViewPackage(activity)?.versionName,
+    )
 
     init {
         configureWebView()
@@ -58,6 +62,20 @@ class SecureWebViewController(
                     "if(typeof f==='function'){f(m);}})($quoted);",
                 null,
             )
+        }
+    }
+
+    fun setChatVisible(visible: Boolean) {
+        val revealing = visible && !chatVisible
+        chatVisible = visible
+        if (!revealing) return
+        webView.post {
+            if (reloadAfterReveal) {
+                webView.reload()
+            } else {
+                webView.requestLayout()
+                webView.postInvalidateOnAnimation()
+            }
         }
     }
 

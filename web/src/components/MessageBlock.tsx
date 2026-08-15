@@ -1,7 +1,7 @@
 import { createContext, isValidElement, useContext, useEffect, useMemo, useRef,
   useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
+import { Markdown } from "./Markdown";
 import { parseLocalFileTarget } from "../file-link";
 import { Icon } from "../icons";
 import {
@@ -222,7 +222,6 @@ const MESSAGE_MARKDOWN_COMPONENTS: Components = Object.freeze({
   img: MarkdownImage,
   a: MarkdownLink,
 });
-const MESSAGE_REMARK_PLUGINS = [remarkGfm];
 
 // Streams markdown with a ~50ms throttle: re-parsing react-markdown on every
 // token delta is wasteful, so we hold a "shown" buffer that catches up on a
@@ -268,9 +267,8 @@ export function MessageBlock({ text, done, onOpenFile, imageAssets,
     <MessageMarkdownContext.Provider value={markdownContext}>
       <div className="prose">
         {parts.map((part, index) => part.kind === "markdown"
-          ? <ReactMarkdown key={`markdown-${index}`}
-              remarkPlugins={MESSAGE_REMARK_PLUGINS}
-              components={MESSAGE_MARKDOWN_COMPONENTS}>{part.text}</ReactMarkdown>
+          ? <Markdown key={`markdown-${index}`}
+              components={MESSAGE_MARKDOWN_COMPONENTS}>{part.text}</Markdown>
           : <div key={`directive-${index}`} className="codex-directive-status"
               data-directive={part.name}>
               <Icon name="verify" size={14} />

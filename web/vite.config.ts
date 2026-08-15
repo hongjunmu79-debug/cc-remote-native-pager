@@ -18,4 +18,19 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Keep react's runtime in a stable chunk so redeploys only change the
+        // app chunk's hash (and the service worker keeps serving the cached
+        // vendor chunk while react is unchanged).
+        manualChunks(id: string) {
+          if (id.includes("node_modules") &&
+              /[\\/](react|react-dom|scheduler)[\\/]/.test(id)) {
+            return "vendor-react";
+          }
+        },
+      },
+    },
+  },
 });

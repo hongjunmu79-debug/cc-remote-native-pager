@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type TouchEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState, type TouchEvent } from "react";
 import { RelayWs, sessionScopeKey, type EventOwnership } from "./ws";
 import { reduce, initialState, createRuntime, type Turn } from "./reducer";
 import { uuid } from "./util";
@@ -12,7 +12,6 @@ import { LoginForm } from "./components/LoginForm";
 import { SessionsSidebar } from "./components/SessionsSidebar";
 import { DirPicker } from "./components/DirPicker";
 import { NewChatView } from "./components/NewChatView";
-import { ArtifactPanel } from "./components/ArtifactPanel";
 import { BtwPanel } from "./components/BtwPanel";
 import { QuestionSheet } from "./components/QuestionSheet";
 import { GoalPanel } from "./components/GoalPanel";
@@ -82,6 +81,11 @@ const HISTORY_MORE_PAGE = 12;
 // persistent grid column on desktop. So auto-close it after picking a session
 // ONLY on mobile; on desktop keep it open.
 const isMobile = () => window.matchMedia("(max-width: 979px)").matches;
+
+// ArtifactPanel (diff/preview) is only mounted when an artifact is open; load it
+// on demand so its chunk is not part of the critical first-paint bundle.
+const ArtifactPanel = lazy(() =>
+  import("./components/ArtifactPanel").then((module) => ({ default: module.ArtifactPanel })));
 
 export default function App() {
   const [theme, setTheme] = useState<DiffTheme>(
@@ -1898,11 +1902,13 @@ export default function App() {
               if (state.btwSid) dispatch({ type: "dismiss_notice", sid: state.btwSid, noticeId });
             }} />;
         if (view === "diff" && state.artifact)
-          return <ArtifactPanel artifact={state.artifact} active="diff" hasBtw={!!state.btwSid}
-            onTab={switchRight} onRefresh={previewFile}
-            onOpenFile={previewFile} onLoadPreviewAsset={loadPreviewAsset}
-            onSaveMarkdown={saveMarkdown} onDirtyChange={setArtifactDirty}
-            onClose={() => dispatch({ type: "clear_artifact" })} />;
+          return <Suspense fallback={null}>
+            <ArtifactPanel artifact={state.artifact} active="diff" hasBtw={!!state.btwSid}
+              onTab={switchRight} onRefresh={previewFile}
+              onOpenFile={previewFile} onLoadPreviewAsset={loadPreviewAsset}
+              onSaveMarkdown={saveMarkdown} onDirtyChange={setArtifactDirty}
+              onClose={() => dispatch({ type: "clear_artifact" })} />
+          </Suspense>;
         return null;
       })()}
       {rt.pendingQuestion && (
