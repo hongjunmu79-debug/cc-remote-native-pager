@@ -1,0 +1,46 @@
+/* Compatibility layer for older Android System WebView releases.
+ * Keep this source-managed and loaded after App.css so production builds are
+ * reproducible; do not patch generated assets after deployment. */
+.terminal-control-card {
+  max-height: min(480px, calc(100vh - var(--terminal-card-top, 20px) - 12px));
+}
+
+@media (max-width: 640px) {
+  .terminal-control-card {
+    position: fixed;
+    inset: auto 0 max(env(safe-area-inset-bottom, 0px), var(--keyboard-inset, 0px));
+    width: 100%;
+    max-height: min(
+      70vh,
+      calc(100vh - var(--keyboard-inset, 0px) - env(safe-area-inset-bottom, 0px) - 12px)
+    );
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 18px 18px 0 0;
+    border-width: 1px 0 0;
+    padding: 18px max(16px, env(safe-area-inset-right, 0px))
+      calc(18px + env(safe-area-inset-bottom, 0px))
+      max(16px, env(safe-area-inset-left, 0px));
+  }
+
+  .terminal-control-scrim {
+    background: rgb(20 16 10 / 34%);
+  }
+}
+
+@media (max-width: 400px) {
+  .terminal-control-card {
+    padding: 14px max(12px, env(safe-area-inset-right, 0px)) 16px
+      max(12px, env(safe-area-inset-left, 0px));
+  }
+
+  .terminal-control-card dl {
+    margin-top: 10px;
+    padding: 4px 8px;
+  }
+
+  .terminal-control-card .terminal-control-reason {
+    margin-top: 8px;
+    padding: 6px 8px;
+  }
+}

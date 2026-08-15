@@ -61,6 +61,11 @@ import { RecoverableReadCoordinator } from "./recoverable-read";
 import { InlineImageAssetCache } from "./inline-image-assets";
 import { HistoryImageAssetCache } from "./history-image-assets";
 import { ComposerDraftStore, composerDraftKey } from "./composer-drafts";
+import { NativePagerBridge } from "./native-pager/NativePagerBridge";
+import { projectNativePagerSnapshot } from "./native-pager/projector";
+import type {
+  NativeCommandEnvelope, NativeCommandResult,
+} from "./native-pager/contract";
 
 const THEME_KEY = "cc_remote_theme";
 const ENGINE_KEY = "cc_remote_engine";  // which backend the NEXT new session uses
@@ -1549,8 +1554,90 @@ export default function App() {
     focusedSessionState, rt.state, rt.mirroredRunning,
   ) ?? rt.state;
 
+  const selectSession = (id: string): boolean => {
+    const selected = state.sessions.find((session) => session.session_id === id);
+    if (!selected || !confirmArtifactDiscard()) return false;
+    pendingCreateRef.current = null;
+    setCreateError(null);
+    setStatusOpenSid(null);
+    setWorkArtifactsOpen(false);
+    const selectedEngine = (selected.engine as "claude" | "codex") || engine;
+    const selectedSpace = selected.space === "work" ? "work" : space;
+    dispatch({ type: "exit_new_chat" });
+    dispatch({ type: "focus_session", sid: id });
+    wsRef.current?.setFocusedSid(id, selectedEngine, selectedSpace);
+    requestHistory(id, undefined, HISTORY_INITIAL_PAGE);
+    wsRef.current?.sendSwitchSession(id, selectedEngine, selectedSpace);
+    if (selectedSpace === "work") {
+      wsRef.current?.sendGetWorkArtifacts(selectedEngine, id);
+    }
+    if (isMobile()) setSidebarOpen(false);
+    return true;
+  };
+
+  const setPinned = (session: SessionInfo, pinned: boolean): void => {
+    const target = sessionCommandTarget(session, engine, space);
+    const surfaceKey = `${target.space}:${target.engine}`;
+    const cached = sessionListsBySurfaceRef.current[surfaceKey];
+    if (cached) {
+      sessionListsBySurfaceRef.current[surfaceKey] = setSessionPinned(
+        cached, session.session_id, pinned);
+    }
+    dispatch({ type: "set_session_pinned", sid: session.session_id, pinned });
+    wsRef.current?.sendPinSession(
+      session.session_id, pinned, target.engine, target.space);
+  };
+
+  const handleNativeCommand = (
+    command: NativeCommandEnvelope,
+  ): NativeCommandResult => {
+    const action = command.action;
+    if (action.kind === "refreshSessions") {
+      wsRef.current?.sendListSessions(engine, space);
+      return { accepted: true };
+    }
+    const session = state.sessions.find((item) => item.session_id === action.taskId);
+    if (!session) return { accepted: false, message: "任务已不存在，请刷新看板" };
+    if (action.kind === "focusTask") {
+      if (artifactDirtyRef.current) {
+        return { accepted: false, message: "聊天页有未保存的文件修改" };
+      }
+      return selectSession(action.taskId)
+        ? { accepted: true } : { accepted: false, message: "无法切换任务" };
+    }
+    if (action.kind === "setPinned") {
+      setPinned(session, action.pinned);
+      return { accepted: true };
+    }
+    if (action.taskId !== focusedSid) {
+      return { accepted: false, message: "请先打开该任务再执行操作" };
+    }
+    const runtime = state.runtimes[action.taskId];
+    if (action.kind === "interruptTask") {
+      const writable = runtime?.control
+        ? runtime.control.write_state === "writable" : !runtime?.external;
+      if (!runtime || runtime.state === "idle" || !writable) {
+        return { accepted: false, message: "当前任务不可中断" };
+      }
+      wsRef.current?.sendInterrupt();
+      return { accepted: true };
+    }
+    if (action.kind === "answerQuestion") {
+      const question = runtime?.pendingQuestion;
+      if (!question) return { accepted: false, message: "问题已失效" };
+      wsRef.current?.sendAnswerQuestion(question.ask_id, action.answer);
+      dispatch({ type: "answer_question" });
+      return { accepted: true };
+    }
+    return { accepted: false, message: "不支持的操作" };
+  };
+
+  const nativePagerSnapshot = projectNativePagerSnapshot(state, { machineId });
+
   return (
     <div className={"shell" + (sidebarOpen ? " sidebar-open" : "") + ((state.artifact || state.btwSid || btwOpening) ? " panel-open" : "")} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <NativePagerBridge snapshot={nativePagerSnapshot}
+        onCommand={handleNativeCommand} />
       <SessionsSidebar
         open={sidebarOpen}
         space={space}
@@ -1565,42 +1652,13 @@ export default function App() {
           ) ?? "idle"];
         }))}
         activeSessionId={focusedSid}
-        onSelect={(id) => {
-          if (!confirmArtifactDiscard()) return;
-          pendingCreateRef.current = null;
-          setCreateError(null);
-          setStatusOpenSid(null);
-          setWorkArtifactsOpen(false);
-          const selected = state.sessions.find((s) => s.session_id === id);
-          const selectedEngine = (selected?.engine as "claude" | "codex") || engine;
-          const selectedSpace = selected?.space === "work" ? "work" : space;
-          dispatch({ type: "exit_new_chat" });
-          dispatch({ type: "focus_session", sid: id });
-          wsRef.current?.setFocusedSid(id, selectedEngine, selectedSpace);
-          requestHistory(id, undefined, HISTORY_INITIAL_PAGE);
-          wsRef.current?.sendSwitchSession(id, selectedEngine, selectedSpace);
-          if (selectedSpace === "work") {
-            wsRef.current?.sendGetWorkArtifacts(selectedEngine, id);
-          }
-          if (isMobile()) setSidebarOpen(false);
-        }}
+        onSelect={(id) => { selectSession(id); }}
         onNew={() => { if (!confirmArtifactDiscard()) return; pendingCreateRef.current = null; setCreateError(null); setStatusOpenSid(null); setNewChatAutoFocus(true); wsRef.current?.setFocusedSid(null); dispatch({ type: "enter_new_chat", cwd: "~", cwdSource: "default" }); if (isMobile()) setSidebarOpen(false); }}
         onNewInDir={(cwd) => { if (!confirmArtifactDiscard()) return; pendingCreateRef.current = null; setCreateError(null); setStatusOpenSid(null); setNewChatAutoFocus(true); wsRef.current?.setFocusedSid(null); dispatch({ type: "enter_new_chat", cwd, cwdSource: "explicit" }); if (isMobile()) setSidebarOpen(false); }}
         onClose={() => setSidebarOpen(false)}
         onRename={(id, title) => wsRef.current?.sendRenameSession(id, title, engine, space)}
         onArchive={(id, archived) => { wsRef.current?.sendArchiveSession(id, archived, engine, space); }}
-        onPin={(session, pinned) => {
-          const target = sessionCommandTarget(session, engine, space);
-          const surfaceKey = `${target.space}:${target.engine}`;
-          const cached = sessionListsBySurfaceRef.current[surfaceKey];
-          if (cached) {
-            sessionListsBySurfaceRef.current[surfaceKey] = setSessionPinned(
-              cached, session.session_id, pinned);
-          }
-          dispatch({ type: "set_session_pinned", sid: session.session_id, pinned });
-          wsRef.current?.sendPinSession(
-            session.session_id, pinned, target.engine, target.space);
-        }}
+        onPin={setPinned}
         onDelete={(id) => {
           const warning = space === "work"
             ? "删除后将永久移除这项工作及其私有文件，确定继续吗？"

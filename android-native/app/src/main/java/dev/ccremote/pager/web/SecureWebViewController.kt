@@ -1,0 +1,194 @@
+package dev.ccremote.pager.web
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.net.Uri
+import android.provider.Settings
+import android.webkit.CookieManager
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.core.net.toUri
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import dev.ccremote.pager.BuildConfig
+import dev.ccremote.pager.data.ServerEndpoint
+import org.json.JSONObject
+
+class SecureWebViewController(
+    private val activity: Activity,
+    initialEndpoint: ServerEndpoint,
+    private val onBridgeMessage: (String) -> Unit,
+    private val onPageProblem: (String?) -> Unit,
+    private val fileChooser: FileChooser,
+) {
+    val webView: WebView = WebView(activity)
+    private var endpoint = initialEndpoint
+    private var bridgeInstalled = false
+
+    init {
+        configureWebView()
+        installBridge(initialEndpoint)
+        webView.loadUrl(initialEndpoint.url)
+    }
+
+    fun reconfigure(next: ServerEndpoint) {
+        if (next == endpoint) return
+        endpoint = next
+        if (bridgeInstalled
+            && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+        ) {
+            WebViewCompat.removeWebMessageListener(webView, BRIDGE_OBJECT)
+            bridgeInstalled = false
+        }
+        installBridge(next)
+        webView.loadUrl(next.url)
+    }
+
+    fun sendCommand(raw: String) {
+        val quoted = JSONObject.quote(raw)
+        webView.post {
+            webView.evaluateJavascript(
+                "(function(m){var f=window.__CC_REMOTE_NATIVE_RECEIVE__;" +
+                    "if(typeof f==='function'){f(m);}})($quoted);",
+                null,
+            )
+        }
+    }
+
+    fun onResume() {
+        webView.onResume()
+    }
+
+    fun onPause() {
+        webView.onPause()
+    }
+
+    fun destroy() {
+        if (bridgeInstalled
+            && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+        ) {
+            WebViewCompat.removeWebMessageListener(webView, BRIDGE_OBJECT)
+        }
+        webView.stopLoading()
+        webView.webChromeClient = null
+        webView.webViewClient = WebViewClient()
+        webView.destroy()
+    }
+
+    @Suppress("SetJavaScriptEnabled", "DEPRECATION")
+    private fun configureWebView() {
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        with(webView.settings) {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = false
+            allowFileAccess = false
+            allowContentAccess = false
+            allowFileAccessFromFileURLs = false
+            allowUniversalAccessFromFileURLs = false
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            mediaPlaybackRequiresUserGesture = false
+            setSupportMultipleWindows(false)
+            javaScriptCanOpenWindowsAutomatically = false
+            safeBrowsingEnabled = true
+            userAgentString = "$userAgentString CCRemoteNativePager/${BuildConfig.VERSION_NAME}"
+        }
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, false)
+        }
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean {
+                if (isAllowedNavigation(request.url)) return false
+                runCatching {
+                    activity.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                }
+                return true
+            }
+
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                onPageProblem(null)
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError,
+            ) {
+                if (request.isForMainFrame) {
+                    onPageProblem(error.description?.toString()?.take(240)
+                        ?: "页面加载失败")
+                }
+            }
+        }
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams,
+            ): Boolean = fileChooser.launch(filePathCallback, fileChooserParams)
+        }
+    }
+
+    private fun installBridge(value: ServerEndpoint) {
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(
+                webView,
+                BRIDGE_OBJECT,
+                setOf(value.origin),
+            ) { _, message, sourceOrigin, isMainFrame, _ ->
+                if (!isMainFrame || sourceOrigin.toString() != endpoint.origin) {
+                    return@addWebMessageListener
+                }
+                message.data?.let(onBridgeMessage)
+            }
+            bridgeInstalled = true
+        } else {
+            onPageProblem("Android System WebView 版本过低，请更新后重试")
+        }
+    }
+
+    private fun isAllowedNavigation(uri: Uri): Boolean {
+        val port = when {
+            uri.port != -1 -> uri.port
+            uri.scheme == "https" -> 443
+            else -> 80
+        }
+        val targetOrigin = buildString {
+            append(uri.scheme)
+            append("://")
+            append(uri.host)
+            val defaultPort = if (uri.scheme == "https") 443 else 80
+            if (port != defaultPort) append(":$port")
+        }
+        return targetOrigin == endpoint.origin
+    }
+
+    fun openWebViewSettings() {
+        runCatching {
+            activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = "package:${activity.packageName}".toUri()
+            })
+        }
+    }
+
+    fun interface FileChooser {
+        fun launch(
+            callback: ValueCallback<Array<Uri>>,
+            params: WebChromeClient.FileChooserParams,
+        ): Boolean
+    }
+
+    private companion object {
+        const val BRIDGE_OBJECT = "ccRemoteNative"
+    }
+}

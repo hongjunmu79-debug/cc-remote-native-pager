@@ -11,6 +11,56 @@
     <meta name="theme-color" content="#F7F5EF" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#1B1A17" media="(prefers-color-scheme: dark)" />
     <title>cc-remote</title>
+    <script id="cc-remote-webview-polyfill">
+      (() => {
+        if (!Object.hasOwn) {
+          Object.hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+        }
+        if (typeof structuredClone === "undefined") {
+          globalThis.structuredClone = (value) => JSON.parse(JSON.stringify(value));
+        }
+        if (typeof crypto !== "undefined" && crypto.getRandomValues && !crypto.randomUUID) {
+          crypto.randomUUID = () => {
+            const bytes = crypto.getRandomValues(new Uint8Array(16));
+            bytes[6] = (bytes[6] & 15) | 64;
+            bytes[8] = (bytes[8] & 63) | 128;
+            const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"));
+            return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+          };
+        }
+        if (!Array.prototype.at) {
+          Array.prototype.at = function (index) {
+            const resolved = index < 0 ? this.length + index : index;
+            return resolved >= 0 && resolved < this.length ? this[resolved] : undefined;
+          };
+        }
+        if (!String.prototype.replaceAll) {
+          String.prototype.replaceAll = function (search, replacement) {
+            return this.split(search).join(replacement);
+          };
+        }
+        if (!Array.prototype.flatMap) {
+          Array.prototype.flatMap = function (callback) {
+            return Array.prototype.concat.apply([], this.map(callback));
+          };
+        }
+        if (!Array.prototype.findLast) {
+          Array.prototype.findLast = function (callback) {
+            for (let index = this.length - 1; index >= 0; index -= 1) {
+              if (callback(this[index], index, this)) return this[index];
+            }
+            return undefined;
+          };
+        }
+        if (!Object.fromEntries) {
+          Object.fromEntries = (entries) => {
+            const result = {};
+            for (const [key, value] of entries) result[key] = value;
+            return result;
+          };
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"><div style="padding:24px;color:#A29B88;font-family:system-ui,sans-serif">加载中…</div></div>

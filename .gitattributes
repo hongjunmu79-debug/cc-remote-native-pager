@@ -1,0 +1,12 @@
+* text=auto
+
+# Linux deployment and Gradle entrypoints must stay executable with LF even
+# when the repository is prepared from Windows for WSL/Linux verification.
+*.sh text eol=lf
+*.py text eol=lf
+gradlew text eol=lf
+experiments/claude-remote text eol=lf
+
+# Native Windows launchers keep their platform line endings.
+*.bat text eol=crlf
+*.ps1 text eol=crlf

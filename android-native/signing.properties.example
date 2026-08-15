@@ -1,0 +1,5 @@
+# Absolute or android-native-relative keystore path.
+storeFile=/path/to/cc-remote-release.jks
+storePassword=change-me
+keyAlias=cc-remote
+keyPassword=change-me

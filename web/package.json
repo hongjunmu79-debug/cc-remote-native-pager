@@ -15,12 +15,13 @@
     "test:history-browser": "playwright test -c playwright.config.ts",
     "test:diff": "npm run test:compile --silent && node --expose-gc node_modules/.tmp/cc-remote-tests/tests/diff-performance.test.js",
     "test:preview": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/markdown-preview.test.js",
-    "test:reliability": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/outbox.test.js && node node_modules/.tmp/cc-remote-tests/tests/history-requests.test.js && node node_modules/.tmp/cc-remote-tests/tests/reliability.test.js && node --expose-gc node_modules/.tmp/cc-remote-tests/tests/diff-performance.test.js && node node_modules/.tmp/cc-remote-tests/tests/goal-command.test.js && node node_modules/.tmp/cc-remote-tests/tests/status-capabilities.test.js && node node_modules/.tmp/cc-remote-tests/tests/notices-rate-limits.test.js && node node_modules/.tmp/cc-remote-tests/tests/session-worktree.test.js && node node_modules/.tmp/cc-remote-tests/tests/scroll-follow.test.js && node node_modules/.tmp/cc-remote-tests/tests/markdown-preview.test.js",
+    "test:native-pager": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/native-pager-bridge.test.js",
+    "test:reliability": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/outbox.test.js && node node_modules/.tmp/cc-remote-tests/tests/history-requests.test.js && node node_modules/.tmp/cc-remote-tests/tests/reliability.test.js && node --expose-gc node_modules/.tmp/cc-remote-tests/tests/diff-performance.test.js && node node_modules/.tmp/cc-remote-tests/tests/goal-command.test.js && node node_modules/.tmp/cc-remote-tests/tests/status-capabilities.test.js && node node_modules/.tmp/cc-remote-tests/tests/notices-rate-limits.test.js && node node_modules/.tmp/cc-remote-tests/tests/session-worktree.test.js && node node_modules/.tmp/cc-remote-tests/tests/scroll-follow.test.js && node node_modules/.tmp/cc-remote-tests/tests/markdown-preview.test.js && node node_modules/.tmp/cc-remote-tests/tests/native-pager-bridge.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.8",
-    "dompurify": "^3.4.12",
+    "dompurify": "3.4.13",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
