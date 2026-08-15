@@ -18,6 +18,20 @@
 - Compose tests for empty, offline, multi-task, urgent, and expanded states.
 - Web reliability suite with the native bridge enabled and absent.
 - Android debug and release builds with lint.
+
+## Legacy WebView geometry
+
+- Terminal-card placement is a pure, unit-tested function rather than an
+  inline collection of CSS offsets.
+- Native Android hosts center the card in the fixed-position layout viewport.
+  This remains correct when an older System WebView exposes a desktop-width
+  layout viewport on a narrow physical display.
+- Browser hosts retain trigger alignment, with both edges clamped inside the
+  viewport. Tests cover the deployed 980px legacy layout and a 390px narrow
+  layout.
+- Release verification includes opening the terminal card on the supported
+  Android device and confirming that its full outline and close action remain
+  visible.
 - Web bundle production build and lint.
 - A local fake bridge fixture exercises WebMessage snapshots and commands
   without starting a model.

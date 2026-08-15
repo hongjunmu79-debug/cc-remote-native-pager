@@ -7,6 +7,7 @@ import {
   presentMissingSessionControl,
   presentSessionControl,
 } from "../session-control-ui";
+import { positionTerminalCard } from "../terminal-card-position";
 
 export type TerminalStatusAvailability = "online" | "syncing" | "offline";
 
@@ -21,8 +22,9 @@ interface Props {
 }
 
 interface CardPosition {
+  left: number;
   top: number;
-  right: number;
+  width: number;
 }
 
 export function TerminalControl({
@@ -38,7 +40,11 @@ export function TerminalControl({
   const cardRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<CardPosition>({ top: 58, right: 10 });
+  const [position, setPosition] = useState<CardPosition>({
+    left: 10,
+    top: 58,
+    width: 350,
+  });
   const reportedUi = control
     ? presentSessionControl(control)
     : legacyExternal
@@ -67,10 +73,11 @@ export function TerminalControl({
     }
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) {
-      setPosition({
-        top: Math.min(rect.bottom + 8, window.innerHeight - 24),
-        right: Math.max(10, window.innerWidth - rect.right),
-      });
+      setPosition(positionTerminalCard(
+        { bottom: rect.bottom, right: rect.right },
+        { height: window.innerHeight, width: window.innerWidth },
+        window.ccRemoteNative !== undefined,
+      ));
     }
     setOpen(true);
   };
@@ -117,8 +124,9 @@ export function TerminalControl({
   }, [open]);
 
   const cardStyle = {
+    "--terminal-card-left": `${position.left}px`,
     "--terminal-card-top": `${position.top}px`,
-    "--terminal-card-right": `${position.right}px`,
+    "--terminal-card-width": `${position.width}px`,
   } as CSSProperties;
 
   return (

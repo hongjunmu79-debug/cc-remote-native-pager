@@ -89,6 +89,35 @@ import {
   ComposerDraftStore,
   composerDraftKey,
 } from "../src/composer-drafts.ts";
+import { positionTerminalCard } from "../src/terminal-card-position.ts";
+
+assert.deepEqual(
+  positionTerminalCard(
+    { bottom: 50, right: 96 },
+    { height: 800, width: 980 },
+    true,
+  ),
+  { left: 315, top: 58, width: 350 },
+  "the native Android host centers the card in a legacy wide layout viewport",
+);
+assert.deepEqual(
+  positionTerminalCard(
+    { bottom: 50, right: 96 },
+    { height: 800, width: 390 },
+    true,
+  ),
+  { left: 20, top: 58, width: 350 },
+  "the centered card retains safe edge gaps on narrow viewports",
+);
+assert.deepEqual(
+  positionTerminalCard(
+    { bottom: 50, right: 96 },
+    { height: 800, width: 980 },
+    false,
+  ),
+  { left: 10, top: 58, width: 350 },
+  "browser positioning remains trigger-aligned while clamping to the viewport",
+);
 
 const composerDrafts = new ComposerDraftStore();
 const draftA = composerDraftKey("machine-a", "code", "codex", "session-a");
@@ -4390,6 +4419,9 @@ const dateTimePickerSource = readFileSync(
 assert.match(dateTimePickerSource, /createPortal\(<>.*document\.body\)/s,
   "the date-time popover must escape the scrollable Work manager container");
 const appCssSource = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
+assert.match(appCssSource,
+  /\.terminal-control-card\{[^}]*right:auto; left:var\(--terminal-card-left\)/,
+  "the terminal card must use its bounded left coordinate instead of an unclamped right offset");
 assert.match(appCssSource, /\.capabilities-sheet>header\{[^}]*flex:none/s,
   "the Extensions header must not collapse under a long capability list");
 assert.match(appCssSource, /\.capabilities-tabs\{[^}]*flex:none/s,

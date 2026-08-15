@@ -155,8 +155,8 @@ body{
 .terminal-control-trigger.tone-disconnected{ color:var(--danger); }
 .terminal-control-trigger.tone-disconnected .terminal-control-dot{ background:var(--danger); }
 .terminal-control-scrim{ position:fixed; inset:0; z-index:62; background:rgba(20,16,10,.08); }
-.terminal-control-card{ position:fixed; z-index:63; top:var(--terminal-card-top); right:var(--terminal-card-right);
-  width:min(350px,calc(100vw - 20px)); max-height:min(480px,calc(100dvh - var(--terminal-card-top) - 12px));
+.terminal-control-card{ position:fixed; z-index:63; top:var(--terminal-card-top); right:auto; left:var(--terminal-card-left);
+  width:var(--terminal-card-width); max-height:min(480px,calc(100dvh - var(--terminal-card-top) - 12px));
   overflow:auto; padding:15px; border:1px solid var(--border-strong); border-radius:15px;
   background:var(--surface); box-shadow:var(--shadow-lg); animation:panel-in .16s var(--ease); }
 .terminal-control-card>header{ display:flex; align-items:flex-start; gap:10px; }
