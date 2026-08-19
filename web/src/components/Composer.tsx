@@ -34,6 +34,7 @@ interface Props {
   state: State;
   connState: ConnState;
   wrapperOnline: boolean;
+  syncReady: boolean;
   sendMode: "interrupt" | "queue";
   setSendMode: (m: "interrupt" | "queue") => void;
   queue: PendingQuery[];
@@ -200,7 +201,7 @@ export function Composer(p: Props) {
       ) : null;
   const controlUi = p.control ? presentSessionControl(p.control) : legacyControl;
   // The connection and authoritative write state independently gate input.
-  const locked = offline || !!controlUi?.locked;
+  const locked = offline || !p.syncReady || !!controlUi?.locked;
   const externalClaudeOwner = p.engine === "claude"
     ? (p.control?.control_mode === "external_cli" ? "外部 CLI"
       : p.control?.control_mode === "agent_view" ? "Agent View"

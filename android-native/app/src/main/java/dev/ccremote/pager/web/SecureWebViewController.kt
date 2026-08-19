@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.Settings
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -31,7 +32,7 @@ class SecureWebViewController(
     private var endpoint = initialEndpoint
     private var bridgeInstalled = false
     private var chatVisible = true
-    private val reloadAfterReveal = requiresReloadAfterReveal(
+    private val refreshCompositorAfterReveal = requiresCompositorRefreshAfterReveal(
         WebViewCompat.getCurrentWebViewPackage(activity)?.versionName,
     )
 
@@ -70,17 +71,42 @@ class SecureWebViewController(
         chatVisible = visible
         if (!revealing) return
         webView.post {
-            if (reloadAfterReveal) {
+            webView.onResume()
+            webView.requestLayout()
+            webView.postInvalidateOnAnimation()
+            if (refreshCompositorAfterReveal) {
+                // Chromium 90 on the target phone can keep the overlay-era
+                // hardware frame. Rebuild only the layer first; a full reload
+                // would tear down the authenticated WebSocket on every card tap.
+                webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                webView.postOnAnimation {
+                    webView.setLayerType(View.LAYER_TYPE_NONE, null)
+                    webView.requestLayout()
+                    webView.postInvalidateOnAnimation()
+                }
+            }
+            verifyLiveDocumentAfterReveal()
+        }
+    }
+
+    private fun verifyLiveDocumentAfterReveal() {
+        webView.evaluateJavascript(
+            "typeof window.__CC_REMOTE_NATIVE_RECEIVE__ === 'function'",
+        ) { result ->
+            if (chatVisible && result != "true") {
+                // The page really was discarded or never completed loading.
+                // This is the bounded recovery fallback, not normal navigation.
                 webView.reload()
-            } else {
-                webView.requestLayout()
-                webView.postInvalidateOnAnimation()
             }
         }
     }
 
     fun onResume() {
         webView.onResume()
+        webView.evaluateJavascript(
+            "window.dispatchEvent(new Event('ccremote-native-resume'))",
+            null,
+        )
     }
 
     fun onPause() {

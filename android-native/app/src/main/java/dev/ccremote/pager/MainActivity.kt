@@ -31,6 +31,7 @@ import dev.ccremote.pager.feedback.PagerFeedbackController
 import dev.ccremote.pager.ui.CCRemotePagerTheme
 import dev.ccremote.pager.ui.PagerDashboardRoot
 import dev.ccremote.pager.web.SecureWebViewController
+import dev.ccremote.pager.web.ImeInsetsController
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -39,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<PagerViewModel>()
     private lateinit var webController: SecureWebViewController
     private lateinit var feedbackController: PagerFeedbackController
+    private lateinit var imeInsetsController: ImeInsetsController
     private lateinit var dashboardView: ComposeView
     private lateinit var backToDashboard: OnBackPressedCallback
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
@@ -96,6 +98,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         setContentView(root)
+        imeInsetsController = ImeInsetsController(webController.webView).also { it.install() }
 
         backToDashboard = object : OnBackPressedCallback(false) {
             override fun handleOnBackPressed() = viewModel.showDashboard()
@@ -180,6 +183,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         pendingFileCallback?.onReceiveValue(null)
         pendingFileCallback = null
+        if (::imeInsetsController.isInitialized) imeInsetsController.clear()
         if (::webController.isInitialized) webController.destroy()
         if (::feedbackController.isInitialized) feedbackController.close()
         super.onDestroy()

@@ -43,6 +43,21 @@ try {
     runtimes: { [sid]: createRuntime() },
   };
 
+  state = reduce(state, { type: "event", event: event({
+    type: "wrapper_reconnected", state: "idle", generation: "wrapper-next",
+  }) });
+  assert.equal(state.wrapperOnline, true,
+    "authenticated wrapper reconnect must immediately clear offline UI");
+  assert.equal(state.runtimes[sid].syncReady, false,
+    "transport liveness must not make a session writable before replay");
+  state = reduce({ ...state, wrapperOnline: false }, {
+    type: "event", event: event({
+      type: "session_list", engine: "claude", space: "code", sessions: [],
+    }),
+  });
+  assert.equal(state.wrapperOnline, true,
+    "a cold client must converge online from an authenticated session list");
+
   // Per-session retention is bounded and duplicate ids replace/move instead of
   // growing the list.  Notice reduction must not mutate the reconnect banner.
   for (let index = 0; index < MAX_SESSION_NOTICES + 3; index += 1) {

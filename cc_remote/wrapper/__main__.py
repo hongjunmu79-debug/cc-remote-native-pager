@@ -28,6 +28,7 @@ async def main() -> None:
         max_size=cfg.ws_max_size_bytes,
         inbox_bytes=cfg.transport_inbox_bytes,
         send_bytes=cfg.transport_send_bytes,
+        reconnect_max_seconds=cfg.reconnect_max_seconds,
     )
     machine = WrapperMachine(cfg, transport)
     try:

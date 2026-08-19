@@ -86,13 +86,15 @@ class WrapperTransport:
     def __init__(self, url: str, token: str, *, inbox_cap: int = 1024,
                  send_cap: int = 8192, max_size: int = 16 * 1024 * 1024,
                  inbox_bytes: int = 32 * 1024 * 1024,
-                 send_bytes: int = 32 * 1024 * 1024):
+                 send_bytes: int = 32 * 1024 * 1024,
+                 reconnect_max_seconds: float = 10.0):
         self.url = url
         self.token = token
         self.max_size = max(1024, max_size)
         self.on_connected: Optional[Callable[[], Awaitable[None]]] = None
         self._inbox = _ByteQueue(inbox_cap, max(inbox_bytes, self.max_size))
         self._send_q = _ByteQueue(send_cap, max(send_bytes, self.max_size))
+        self.reconnect_max_seconds = max(1.0, float(reconnect_max_seconds))
         self._connected = False
         self._generation = 0
         self._stop = False
@@ -194,7 +196,7 @@ class WrapperTransport:
             await self._drain_send_queue()
             if not self._stop:
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                backoff = min(backoff * 2, self.reconnect_max_seconds)
 
     async def _drain_send_queue(self) -> None:
         dropped = await self._send_q.drain()

@@ -1,7 +1,10 @@
 import type {
   AppState, Block, ProcessBlock, SessionRuntime, ToolBlock, Turn,
 } from "../reducer.ts";
-import { mergeSessionActivityState } from "../session-order.ts";
+import {
+  mergeSessionActivityState,
+  sessionActivityTime,
+} from "../session-order.ts";
 import type { SessionInfo, State } from "../protocol.ts";
 import {
   boundedNativeString,
@@ -19,11 +22,11 @@ const MAX_SUBAGENTS = 16;
 export interface NativeProjectionContext {
   machineId: string;
   now?: number;
+  sessions?: readonly SessionInfo[];
 }
 
 function parseTime(value: string | null | undefined): number | undefined {
-  if (!value) return undefined;
-  const parsed = Date.parse(value);
+  const parsed = sessionActivityTime(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
@@ -209,7 +212,7 @@ export function projectNativePagerSnapshot(
     wrapperOnline: state.wrapperOnline,
     machineId: boundedNativeString(context.machineId, 128) ?? "default",
     focusedTaskId: state.focusedSid ?? undefined,
-    tasks: state.sessions.slice(0, MAX_TASKS).map((session) => (
+    tasks: (context.sessions ?? state.sessions).slice(0, MAX_TASKS).map((session) => (
       projectTask(session, state, now)
     )),
   };

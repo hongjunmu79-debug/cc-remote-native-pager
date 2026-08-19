@@ -1278,6 +1278,10 @@ function reduceEvent(
         && !e.sessions.some((session) => session.session_id === state.focusedSid);
       return {
         ...state,
+        // A session list is an authenticated wrapper response. It also covers
+        // the cold-client race where the wrapper connected before this browser
+        // and therefore no wrapper_reconnected broadcast is observed here.
+        wrapperOnline: true,
         sessions: e.sessions,
         focusedSid: focusedMissing ? null : state.focusedSid,
         newChat: focusedMissing
@@ -1753,9 +1757,17 @@ function reduceEvent(
         banner: "machine offline — waiting for reconnect",
       };
     case "wrapper_reconnected":
-      // The event only proves a process connected to the relay. Wait for this
-      // client's Hello replay/snapshot before draining any queued turns.
-      return { ...state, wrapperOnline: false, banner: "machine reconnected — syncing…" };
+      // Relay authentication proves transport liveness immediately. Session
+      // write readiness remains separate: each runtime stays syncReady=false
+      // until its replay/snapshot arrives, so queues cannot drain early.
+      return {
+        ...state,
+        runtimes: Object.fromEntries(Object.entries(state.runtimes).map(
+          ([sid, runtime]) => [sid, { ...runtime, syncReady: false }],
+        )),
+        wrapperOnline: true,
+        banner: "machine reconnected — syncing…",
+      };
     case "diff_report":
       if (!state.artifact || state.artifact.file !== e.file
           || state.artifact.requestId !== e.request_id

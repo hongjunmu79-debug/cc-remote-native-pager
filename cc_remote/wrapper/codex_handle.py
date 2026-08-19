@@ -130,6 +130,22 @@ class CodexProxyProtocolError(RuntimeError):
     """The local proxy stream violated its RFC 6455 boundary."""
 
 
+class CodexActiveWriterError(RuntimeError):
+    """The official app-server refused a second writer for one thread."""
+
+
+def _is_active_writer_error(error: object) -> bool:
+    if not isinstance(error, dict):
+        return False
+    code = error.get("code")
+    message = error.get("message")
+    return (
+        code == -32600
+        and isinstance(message, str)
+        and "already has an active writer" in message.lower()
+    )
+
+
 def _websocket_client_frame(
     payload: bytes, *, opcode: int = 0x1, fin: bool = True,
 ) -> bytes:
@@ -2710,7 +2726,11 @@ class CodexHandle:
             fut = self._pending.get(m["id"])
             if fut and not fut.done():
                 if "error" in m:
-                    fut.set_exception(RuntimeError(str(m["error"])))
+                    error = m["error"]
+                    if _is_active_writer_error(error):
+                        fut.set_exception(CodexActiveWriterError(str(error)))
+                    else:
+                        fut.set_exception(RuntimeError(str(error)))
                 else:
                     fut.set_result(m.get("result"))
             return

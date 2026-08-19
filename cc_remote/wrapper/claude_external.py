@@ -20,11 +20,14 @@ from cc_remote.wrapper.codex_external import (
 from cc_remote.wrapper.process_scan import (
     MAX_PROC_SCAN,
     ProcessIdentity,
+    WindowsProcessInfo,
     _process_cmdline,
     _process_start_ticks,
     _process_stat,
     darwin_process_snapshot,
     process_identity,
+    windows_filetime_to_unix_ms,
+    windows_process_snapshot,
 )
 
 
@@ -43,6 +46,9 @@ _NEUTRAL_METADATA_TYPES = frozenset({
     "queue-operation",
 })
 _MAX_DARWIN_CLAUDE_CANDIDATES = 256
+_MAX_WINDOWS_CLAUDE_CANDIDATES = 256
+_MAX_WINDOWS_SESSION_RECORD_BYTES = 8 * 1024
+_WINDOWS_LEGACY_START_TOLERANCE_MS = 120_000
 
 
 def classify_claude_growth(
@@ -349,6 +355,137 @@ def _darwin_claude_session_holders(
     return HolderScan(holders, complete)
 
 
+def _windows_session_binding(
+    identity: ProcessIdentity,
+    session_root: Path,
+) -> tuple[str, str | None] | None:
+    """Read and validate Claude's PID-scoped Windows session registry row.
+
+    Current Claude Code builds persist ``~/.claude/sessions/<pid>.json`` with
+    the exact native process creation FILETIME. Older builds omit ``procStart``
+    but include a millisecond startup timestamp, which is accepted only within
+    a narrow window after the independently sampled process creation time.
+    """
+    path = session_root / f"{identity.pid}.json"
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if not raw or len(raw) > _MAX_WINDOWS_SESSION_RECORD_BYTES:
+        return None
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or value.get("pid") != identity.pid:
+        return None
+
+    process_start = value.get("procStart")
+    if process_start is not None:
+        try:
+            matches_identity = int(process_start) == identity.start_ticks
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not matches_identity:
+            return None
+    else:
+        started_at = value.get("startedAt")
+        if (not isinstance(started_at, (int, float))
+                or isinstance(started_at, bool)):
+            return None
+        expected_ms = windows_filetime_to_unix_ms(identity.start_ticks)
+        if abs(int(started_at) - expected_ms) > _WINDOWS_LEGACY_START_TOLERANCE_MS:
+            return None
+
+    sid = value.get("sessionId")
+    if not isinstance(sid, str) or not sid or len(sid) > 256:
+        return None
+    cwd = value.get("cwd")
+    if cwd is not None and (not isinstance(cwd, str) or not cwd):
+        return None
+    return sid, cwd
+
+
+def _windows_claude_session_holders(
+    paths: Mapping[str, str],
+    cwds: Mapping[str, str],
+    *,
+    wrapper_pid: int,
+    continue_bindings: dict[ProcessIdentity, str],
+    continue_candidates: dict[ProcessIdentity, str],
+    session_root: Path,
+) -> HolderScan:
+    """Bind Windows Claude processes through Claude's PID session registry."""
+    holders = {sid: set() for sid in paths}
+    snapshot, parent_by_pid, complete = windows_process_snapshot()
+    if not complete:
+        return HolderScan(holders, False)
+    candidates: list[WindowsProcessInfo] = [
+        info for info in snapshot
+        if _is_claude_cli(info.args)
+        and not _is_descendant(
+            info.identity.pid,
+            info.parent_pid,
+            wrapper_pid,
+            parent_by_pid=parent_by_pid,
+        )
+    ]
+    if len(candidates) > _MAX_WINDOWS_CLAUDE_CANDIDATES:
+        return HolderScan(holders, False)
+
+    sid_by_arg = {sid.encode(): sid for sid in paths}
+    watched_cwds = {
+        os.path.normcase(os.path.realpath(cwd))
+        for sid, cwd in cwds.items()
+        if sid in paths and cwd
+    }
+    for info in candidates:
+        identity = info.identity
+        matched, has_explicit_session = _explicit_session_ids(
+            info.args, sid_by_arg)
+        binding = _windows_session_binding(identity, session_root)
+        if binding is not None:
+            bound_sid, process_cwd = binding
+            if bound_sid in paths and (
+                    has_explicit_session and bound_sid not in matched):
+                # Runtime registry and command-line target disagree. Never choose
+                # one side of contradictory process ownership evidence.
+                complete = False
+                matched.clear()
+            elif bound_sid in paths:
+                matched.add(bound_sid)
+            elif has_explicit_session:
+                # A process explicitly bound outside the watched catalog cannot
+                # own a watched session merely because its cwd happens to match.
+                # Only fail closed if its command line explicitly points back
+                # into this catalog; unrelated explicit sessions are independent
+                # and must not poison every single-session takeover probe.
+                if matched:
+                    complete = False
+                matched.clear()
+            elif process_cwd and os.path.normcase(
+                    os.path.realpath(process_cwd)) in watched_cwds:
+                # The registry is authoritative even when this exact session is
+                # not resident yet; do not fan it out to cwd siblings.
+                matched.clear()
+        elif not matched and not has_explicit_session:
+            # A bare live Claude candidate without a validated registry row may
+            # still own one of the watched transcripts. Preserve fail-closed
+            # behavior until Claude finishes publishing its PID record.
+            complete = False
+
+        if process_identity(identity.pid) != identity:
+            complete = False
+            continue
+        for sid in matched:
+            holders[sid].add(identity)
+
+    if complete:
+        continue_bindings.clear()
+        continue_candidates.clear()
+    return HolderScan(holders, complete)
+
+
 def claude_session_holders(
     paths: Mapping[str, str],
     cwds: Mapping[str, str],
@@ -358,6 +495,7 @@ def claude_session_holders(
     continue_bindings: dict[ProcessIdentity, str] | None = None,
     continue_candidates: dict[ProcessIdentity, str] | None = None,
     continue_resolver: Callable[[str], str | None] | None = None,
+    windows_session_root: str | None = None,
 ) -> HolderScan:
     """Return stable external Claude process identities for watched sessions.
 
@@ -380,6 +518,19 @@ def claude_session_holders(
             continue_bindings=bindings,
             continue_candidates=candidates,
             continue_resolver=continue_resolver,
+        )
+    if sys.platform == "win32" and proc_root == "/proc":
+        return _windows_claude_session_holders(
+            paths,
+            cwds,
+            wrapper_pid=wrapper_pid,
+            continue_bindings=bindings,
+            continue_candidates=candidates,
+            session_root=(
+                Path(windows_session_root)
+                if windows_session_root is not None
+                else Path.home() / ".claude" / "sessions"
+            ),
         )
     sid_by_arg = {sid.encode(): sid for sid in paths}
     cwd_sids: dict[str, set[str]] = {}

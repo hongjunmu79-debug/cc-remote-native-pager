@@ -4,6 +4,7 @@ import {
   parseNativeCommand,
 } from "../src/native-pager/contract.ts";
 import { projectNativePagerSnapshot } from "../src/native-pager/projector.ts";
+import { nativeCodeCatalog } from "../src/native-pager/catalog.ts";
 import type { AppState, SessionRuntime } from "../src/reducer.ts";
 
 const runtime = {
@@ -45,6 +46,33 @@ assert.equal(snapshot.tasks[0].focused, true);
 assert(snapshot.tasks[0].capabilities.includes("interrupt"));
 assert(!JSON.stringify(snapshot).includes("SECRET_RAW_TOOL_OUTPUT"));
 assert(!JSON.stringify(snapshot).includes("private prompt"));
+
+const combined = nativeCodeCatalog({
+  "code:claude": [{
+    session_id: "claude-1", summary: "Claude task", last_modified: "1000",
+  }],
+  "code:codex": [{
+    session_id: "codex-1", summary: "Codex task", last_modified: "2000",
+  }],
+  "work:codex": [{
+    session_id: "work-1", summary: "Not a Code dashboard task",
+  }],
+});
+assert.deepEqual(combined.map((session) => session.session_id), ["codex-1", "claude-1"]);
+assert.deepEqual(combined.map((session) => session.engine), ["codex", "claude"]);
+assert(combined.every((session) => session.space === "code"));
+
+const combinedSnapshot = projectNativePagerSnapshot(state, {
+  machineId: "max-matebook", now: 5_000, sessions: combined,
+});
+assert.deepEqual(
+  combinedSnapshot.tasks.map((task) => task.engine),
+  ["codex", "claude"],
+);
+assert.deepEqual(
+  combinedSnapshot.tasks.map((task) => task.updatedAt),
+  [2_000_000, 1_000_000],
+);
 
 runtime.pendingQuestion = {
   ask_id: "ask-1", question: "选择发布方式", options: [{ label: "灰度" }],

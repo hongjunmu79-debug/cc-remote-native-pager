@@ -62,6 +62,7 @@ import { HistoryImageAssetCache } from "./history-image-assets";
 import { ComposerDraftStore, composerDraftKey } from "./composer-drafts";
 import { NativePagerBridge } from "./native-pager/NativePagerBridge";
 import { projectNativePagerSnapshot } from "./native-pager/projector";
+import { findNativeSession, nativeCodeCatalog } from "./native-pager/catalog";
 import type {
   NativeCommandEnvelope, NativeCommandResult,
 } from "./native-pager/contract";
@@ -81,6 +82,8 @@ const HISTORY_MORE_PAGE = 12;
 // persistent grid column on desktop. So auto-close it after picking a session
 // ONLY on mobile; on desktop keep it open.
 const isMobile = () => window.matchMedia("(max-width: 979px)").matches;
+const hasNativePagerHost = () =>
+  typeof window.ccRemoteNative?.postMessage === "function";
 
 // ArtifactPanel (diff/preview) is only mounted when an artifact is open; load it
 // on demand so its chunk is not part of the critical first-paint bundle.
@@ -157,6 +160,10 @@ export default function App() {
   const pendingSessionForkRef = useRef<PendingSessionFork | null>(null);
   const pendingWorktreeForkRef = useRef<PendingWorktreeFork | null>(null);
   const sessionListsBySurfaceRef = useRef<Record<string, SessionInfo[]>>({});
+  const [nativeCatalogRevision, bumpNativeCatalogRevision] = useReducer(
+    (value: number) => value + 1,
+    0,
+  );
   // Cached lists are paint-only during a surface switch. A surface may choose
   // its remembered/latest focus only after a fresh wrapper list is accepted.
   const authoritativeSurfaceListsRef = useRef<Set<string>>(new Set());
@@ -530,6 +537,7 @@ export default function App() {
             if (msg.type === "user_msg" && changed) {
               sessionActivityPendingRef.current.add(msg.sid);
             }
+            if (changed) bumpNativeCatalogRevision();
           }
           if (msg.type === "history_invalidated") {
             const sid = msg.session_id;
@@ -823,7 +831,10 @@ export default function App() {
             ws.setSessionEngines(msg.sessions);
             const listedSpace = msg.space ?? "code";
             const surfaceKey = `${listedSpace}:${msg.engine}`;
-            sessionListsBySurfaceRef.current[surfaceKey] = msg.sessions;
+            sessionListsBySurfaceRef.current[surfaceKey] = msg.sessions.map(
+              (session) => ({ ...session, engine: msg.engine, space: listedSpace }),
+            );
+            bumpNativeCatalogRevision();
             authoritativeSurfaceListsRef.current.add(surfaceKey);
             prefetchedSurfacesRef.current.add(surfaceKey);
             // Warm the sibling Work/Code surface once per page lifetime. Codex
@@ -831,7 +842,8 @@ export default function App() {
             // not start a second app-server and the user's first toggle is fast.
             const siblingSpace: Space = listedSpace === "work" ? "code" : "work";
             const siblingKey = `${siblingSpace}:${msg.engine}`;
-            if (!prefetchedSurfacesRef.current.has(siblingKey)) {
+            if (msg.engine === engineRef.current
+                && !prefetchedSurfacesRef.current.has(siblingKey)) {
               prefetchedSurfacesRef.current.add(siblingKey);
               ws.sendListSessions(msg.engine, siblingSpace);
             }
@@ -847,6 +859,7 @@ export default function App() {
                   : session,
               );
             }
+            bumpNativeCatalogRevision();
           }
           if (msg.type === "work_dashboard") {
             setWorkDashboards((current) => ({ ...current, [msg.engine]: msg }));
@@ -902,7 +915,15 @@ export default function App() {
           }
           dispatch({ type: "event", event: msg, ownership });
           if (msg.type === "wrapper_reconnected") {
-            ws.sendListSessions(engineRef.current, spaceRef.current);
+            if (hasNativePagerHost()) {
+              ws.sendListSessions("claude", "code");
+              ws.sendListSessions("codex", "code");
+              if (spaceRef.current === "work") {
+                ws.sendListSessions(engineRef.current, "work");
+              }
+            } else {
+              ws.sendListSessions(engineRef.current, spaceRef.current);
+            }
             if (spaceRef.current === "work") {
               ws.sendGetWorkDashboard(engineRef.current);
             }
@@ -936,7 +957,18 @@ export default function App() {
           if (s === "connected") {
             recoverableReads.clear();
             historyRequestsRef.current.beginConnection();
-            ws.sendListSessions(engineRef.current, spaceRef.current);
+            // The native dashboard is engine-neutral. Warm both Code catalogs
+            // on the same socket; the active Web surface still accepts only its
+            // own response into the reducer.
+            if (hasNativePagerHost()) {
+              ws.sendListSessions("claude", "code");
+              ws.sendListSessions("codex", "code");
+              if (spaceRef.current === "work") {
+                ws.sendListSessions(engineRef.current, "work");
+              }
+            } else {
+              ws.sendListSessions(engineRef.current, spaceRef.current);
+            }
             if (spaceRef.current === "work") {
               ws.sendGetWorkDashboard(engineRef.current);
               const currentSid = stateRef.current.focusedSid;
@@ -1295,6 +1327,7 @@ export default function App() {
     if (cached) {
       sessionListsBySurfaceRef.current[surfaceKey] = bumpSessionActivity(
         cached, focusedSid, activityMs);
+      bumpNativeCatalogRevision();
     }
     sessionActivityPendingRef.current.add(focusedSid);
     dispatch({ type: "query_sent", sid: focusedSid, prompt, msg_id, images, files,
@@ -1558,15 +1591,26 @@ export default function App() {
     focusedSessionState, rt.state, rt.mirroredRunning,
   ) ?? rt.state;
 
-  const selectSession = (id: string): boolean => {
-    const selected = state.sessions.find((session) => session.session_id === id);
+  const selectSession = (id: string, candidate?: SessionInfo): boolean => {
+    const selected = candidate
+      ?? state.sessions.find((session) => session.session_id === id)
+      ?? findNativeSession(sessionListsBySurfaceRef.current, id);
     if (!selected || !confirmArtifactDiscard()) return false;
     pendingCreateRef.current = null;
     setCreateError(null);
     setStatusOpenSid(null);
     setWorkArtifactsOpen(false);
     const selectedEngine = (selected.engine as "claude" | "codex") || engine;
-    const selectedSpace = selected.space === "work" ? "work" : space;
+    const selectedSpace: Space = selected.space === "work" ? "work" : "code";
+    if (selectedEngine !== engine || selectedSpace !== space) {
+      prepareSurfaceSwitch(selectedEngine, selectedSpace);
+      preferredSurfaceFocusRef.current = {
+        key: `${selectedSpace}:${selectedEngine}`,
+        sid: id,
+      };
+      setEngine(selectedEngine);
+      setSpace(selectedSpace);
+    }
     dispatch({ type: "exit_new_chat" });
     dispatch({ type: "focus_session", sid: id });
     wsRef.current?.setFocusedSid(id, selectedEngine, selectedSpace);
@@ -1586,6 +1630,7 @@ export default function App() {
     if (cached) {
       sessionListsBySurfaceRef.current[surfaceKey] = setSessionPinned(
         cached, session.session_id, pinned);
+      bumpNativeCatalogRevision();
     }
     dispatch({ type: "set_session_pinned", sid: session.session_id, pinned });
     wsRef.current?.sendPinSession(
@@ -1597,16 +1642,18 @@ export default function App() {
   ): NativeCommandResult => {
     const action = command.action;
     if (action.kind === "refreshSessions") {
-      wsRef.current?.sendListSessions(engine, space);
+      wsRef.current?.sendListSessions("claude", "code");
+      wsRef.current?.sendListSessions("codex", "code");
       return { accepted: true };
     }
-    const session = state.sessions.find((item) => item.session_id === action.taskId);
+    const session = state.sessions.find((item) => item.session_id === action.taskId)
+      ?? findNativeSession(sessionListsBySurfaceRef.current, action.taskId);
     if (!session) return { accepted: false, message: "任务已不存在，请刷新看板" };
     if (action.kind === "focusTask") {
       if (artifactDirtyRef.current) {
         return { accepted: false, message: "聊天页有未保存的文件修改" };
       }
-      return selectSession(action.taskId)
+      return selectSession(action.taskId, session)
         ? { accepted: true } : { accepted: false, message: "无法切换任务" };
     }
     if (action.kind === "setPinned") {
@@ -1636,7 +1683,14 @@ export default function App() {
     return { accepted: false, message: "不支持的操作" };
   };
 
-  const nativePagerSnapshot = projectNativePagerSnapshot(state, { machineId });
+  const nativeSessions = nativeCodeCatalog(sessionListsBySurfaceRef.current);
+  // Reading the revision makes background catalog updates an explicit render
+  // dependency without copying large task arrays into React state.
+  void nativeCatalogRevision;
+  const nativePagerSnapshot = projectNativePagerSnapshot(state, {
+    machineId,
+    sessions: nativeSessions,
+  });
 
   return (
     <div className={"shell" + (sidebarOpen ? " sidebar-open" : "") + ((state.artifact || state.btwSid || btwOpening) ? " panel-open" : "")} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -1824,6 +1878,7 @@ export default function App() {
           catalog={state.catalog}
           connState={state.connState}
           wrapperOnline={state.wrapperOnline}
+          syncReady={rt.syncReady}
           sendMode={state.sendMode}
           setSendMode={(m) => dispatch({ type: "set_send_mode", mode: m })}
           queue={rt.queue}

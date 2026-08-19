@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from claude_agent_sdk import get_session_messages
 
+from cc_remote.file_lock import fsync_directory, has_private_owner_mode
 from cc_remote.wrapper.stream import transcript_path
 
 
@@ -136,8 +137,7 @@ class ClaudeControlStore:
         except FileNotFoundError:
             return {}
         if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
-                or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) & 0o077
+                or not has_private_owner_mode(info)
                 or info.st_size > _MAX_FILE_BYTES):
             raise ClaudeControlStoreError(
                 "Claude control store is not a private bounded file")
@@ -200,11 +200,7 @@ class ClaudeControlStore:
                 raise
             os.replace(temporary, self.path)
             os.chmod(self.path, 0o600)
-            directory_fd = os.open(parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            fsync_directory(parent)
         except Exception as exc:
             try:
                 temporary.unlink()

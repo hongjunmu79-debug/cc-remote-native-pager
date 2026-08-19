@@ -137,6 +137,16 @@ def test_session_state_filename_is_utf8_safe_and_state_read_is_bounded(tmp_path)
     assert load_session_id(tmp_path, cwd) is None
 
 
+def test_windows_session_state_path_stays_inside_sessions_directory(tmp_path):
+    cwd = r"C:\Users\23715\Documents\Codex\project"
+    path = _session_file(tmp_path, cwd)
+
+    assert path.parent == tmp_path / "sessions"
+    assert not any(character in path.name for character in ("\\", "/", ":"))
+    save_session_id(tmp_path, cwd, "session-windows")
+    assert load_session_id(tmp_path, cwd) == "session-windows"
+
+
 def test_session_alias_state_read_is_bounded_and_validated():
     machine, _ = _mk_machine()
     path = machine._alias_file()

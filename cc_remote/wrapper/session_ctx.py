@@ -89,6 +89,15 @@ class SessionContext:
     # managed turn stream so the session remains single-writer and interruptible.
     codex_spontaneous_turn_id: Optional[str] = None
     codex_spontaneous_task: Optional[asyncio.Task] = None
+    # Codex Desktop can keep the app-server's per-thread writer lease while its
+    # visible turn is idle. Keep a history-capable resident context and retry the
+    # official resume path with bounded backoff instead of reporting a network
+    # disconnect or spawning a competing private writer.
+    codex_writer_blocked: bool = False
+    codex_writer_retry_at: float = 0.0
+    codex_writer_retry_delay: float = 2.0
+    codex_writer_retry_task: Optional[asyncio.Task] = None
+    codex_writer_retry_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Remote-owned Git checkpoint journal for Codex Code turns. It is created
     # lazily only in Git workspaces; Work and Claude use their own restore paths.
     codex_checkpoint: Any = None

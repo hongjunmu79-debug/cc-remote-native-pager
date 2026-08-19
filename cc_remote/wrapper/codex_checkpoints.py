@@ -19,7 +19,6 @@ checkpoint boundary.  Empty directories are not representable in Git trees.
 from __future__ import annotations
 
 import copy
-import fcntl
 import hashlib
 import json
 import os
@@ -33,6 +32,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Optional
+
+from cc_remote.file_lock import lock_exclusive, unlock
 
 from cc_remote.wrapper.child_env import sanitized_child_env
 
@@ -223,7 +224,9 @@ class CodexCheckpointJournal:
         self.objects_dir = self.session_dir / "objects"
         self.temp_dir = self.session_dir / "tmp"
         self.manifest_path = self.session_dir / "manifest.json"
-        self.lock_path = self.session_dir / "journal.lock"
+        # Keep the lock beside the session directory.  Windows refuses to
+        # atomically retire a directory while a child lock file is open.
+        self.lock_path = self.session_dir.with_name(f".{session_key}.lock")
         self._closed = False
 
         self.temp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -275,10 +278,10 @@ class CodexCheckpointJournal:
         self.session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            lock_exclusive(fd)
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            unlock(fd)
             os.close(fd)
 
     def _load_manifest(self) -> dict[str, Any]:

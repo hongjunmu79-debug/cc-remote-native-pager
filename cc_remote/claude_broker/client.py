@@ -20,7 +20,7 @@ from .protocol import (
     write_frame,
     write_json,
 )
-from .server import BrokerSecurityError, _peer_uid
+from .security import BrokerSecurityError, peer_uid
 
 
 class BrokerClientError(RuntimeError):
@@ -140,7 +140,7 @@ class BrokerClient:
             raise BrokerClientError("broker_unavailable", f"cannot connect to broker: {exc}") from exc
         peer_socket = writer.get_extra_info("socket")
         try:
-            if peer_socket is None or _peer_uid(peer_socket) != os.getuid():
+            if peer_socket is None or peer_uid(peer_socket) != os.getuid():
                 raise BrokerClientError("unsafe_socket", "broker peer uid does not match")
         except (BrokerSecurityError, BrokerClientError) as exc:
             writer.close()

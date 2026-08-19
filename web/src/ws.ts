@@ -106,6 +106,11 @@ export class RelayWs {
   private pingSeq = 0;
   private wrapperGeneration: string | null = null;
   private lastGenerationChangeNotice: string | null = null;
+  private readonly onOnline = () => this.wakeConnection();
+  private readonly onVisibilityChange = () => {
+    if (typeof document === "undefined" || !document.hidden) this.wakeConnection();
+  };
+  private readonly onNativeResume = () => this.wakeConnection();
 
   constructor(cb: WsCallbacks, machineId = "default") {
     this.cb = cb;
@@ -121,6 +126,12 @@ export class RelayWs {
   }
 
   start(): void {
+    this.stopped = false;
+    window.addEventListener?.("online", this.onOnline);
+    window.addEventListener?.("ccremote-native-resume", this.onNativeResume);
+    if (typeof document !== "undefined") {
+      document.addEventListener?.("visibilitychange", this.onVisibilityChange);
+    }
     this.connect();
   }
 
@@ -128,7 +139,39 @@ export class RelayWs {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.stopHeartbeat();
+    window.removeEventListener?.("online", this.onOnline);
+    window.removeEventListener?.("ccremote-native-resume", this.onNativeResume);
+    if (typeof document !== "undefined") {
+      document.removeEventListener?.("visibilitychange", this.onVisibilityChange);
+    }
     this.ws?.close();
+  }
+
+  /** Probe immediately after network/app resume instead of waiting 20-45s. */
+  private wakeConnection(): void {
+    if (this.stopped) return;
+    const ws = this.ws;
+    if (ws?.readyState === WebSocket.OPEN) {
+      if (Date.now() - this.lastRecvAt > 30_000) {
+        ws.close();
+      } else {
+        this.sendUntracked({
+          v: PROTOCOL_VERSION,
+          type: "ping",
+          n: ++this.pingSeq,
+          ts: nowTs(),
+        });
+      }
+      return;
+    }
+    if (ws?.readyState === WebSocket.CONNECTING) return;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.ws = null;
+    this.backoff = 1;
+    this.connect();
   }
 
   // App-level heartbeat. The browser's WS onclose does NOT fire for a HALF-OPEN

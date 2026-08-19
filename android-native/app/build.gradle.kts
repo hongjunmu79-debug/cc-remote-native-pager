@@ -28,7 +28,8 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.ccremote.lan"
+        applicationId = providers.environmentVariable("PAGER_APPLICATION_ID")
+            .orNull ?: "dev.ccremote.lan"
         minSdk = 26
         targetSdk = 36
         versionCode = providers.environmentVariable("PAGER_VERSION_CODE")
@@ -41,6 +42,9 @@ android {
             "DEFAULT_SERVER_URL",
             "\"${providers.environmentVariable("PAGER_DEFAULT_URL").orNull ?: "http://192.168.3.4:8766/"}\"",
         )
+        providers.environmentVariable("PAGER_APP_LABEL").orNull?.let { label ->
+            resValue("string", "app_name", label)
+        }
     }
 
     signingConfigs {

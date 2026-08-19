@@ -73,6 +73,11 @@ from cc_remote.attachments import (
     validate_attachments,
 )
 from cc_remote.config import WrapperConfig
+from cc_remote.file_lock import (
+    fsync_directory,
+    owned_by_current_user,
+    set_file_mode,
+)
 from cc_remote.log import logger
 from cc_remote.workspaces import WorkStores
 from cc_remote.protocol import (
@@ -132,7 +137,7 @@ from cc_remote.wrapper.stream import (
     translate_subagent_history, merge_subagent_history,
 )
 from cc_remote.wrapper.codex_handle import (
-    CodexHandle, CodexManagedOverflow,
+    CodexActiveWriterError, CodexHandle, CodexManagedOverflow,
     CodexSpontaneousClosed, CodexSpontaneousOverflow,
 )
 from cc_remote.wrapper.codex_stream import (
@@ -185,6 +190,7 @@ from cc_remote.wrapper.process_scan import (
     ProcessIdentity,
     process_identity,
     process_owner_uid,
+    terminate_exact_process,
 )
 from cc_remote.wrapper.transport import WrapperTransport
 
@@ -714,13 +720,15 @@ class WrapperMachine:
         """Restore one interrupted shared proxy without changing ownership."""
         if not self._codex_shared_affinity(ctx):
             return False
+        if ctx.codex_writer_blocked:
+            return await self._retry_codex_writer_attach(ctx, force=True)
         if self._codex_shared_live(ctx):
             return True
         watch = self._watch.get(ctx.session_id or "")
         await self._set_session_control(
             ctx,
             control_mode="codex_shared",
-            write_state="writable",
+            write_state="read_only",
             terminal_attached=bool((watch or {}).get("holders")),
             reason="Codex 共享通道连接断开，正在重新连接",
             can_takeover=False,
@@ -731,6 +739,9 @@ class WrapperMachine:
                 cwd=ctx.cwd,
                 reason=reason,
             )
+        except CodexActiveWriterError:
+            await self._mark_codex_writer_blocked(ctx, emit=True)
+            return False
         except Exception as exc:
             log.warning(
                 "Codex shared proxy reconnect failed",
@@ -741,7 +752,7 @@ class WrapperMachine:
             await self._set_session_control(
                 ctx,
                 control_mode="codex_shared",
-                write_state="writable",
+                write_state="read_only",
                 terminal_attached=bool((watch or {}).get("holders")),
                 reason="Codex 共享通道连接断开；下次操作会自动重试",
                 can_takeover=False,
@@ -751,7 +762,7 @@ class WrapperMachine:
             await self._set_session_control(
                 ctx,
                 control_mode="codex_shared",
-                write_state="writable",
+                write_state="read_only",
                 terminal_attached=bool((watch or {}).get("holders")),
                 reason="Codex 共享通道尚未恢复；下次操作会自动重试",
                 can_takeover=False,
@@ -760,12 +771,142 @@ class WrapperMachine:
         await self._sync_external_control(ctx, watch)
         return True
 
+    async def _mark_codex_writer_blocked(
+        self,
+        ctx: SessionContext,
+        *,
+        emit: bool,
+    ) -> None:
+        ctx.codex_writer_blocked = True
+        ctx.codex_writer_retry_at = (
+            asyncio.get_running_loop().time() + ctx.codex_writer_retry_delay
+        )
+        await self._set_session_control(
+            ctx,
+            control_mode="desktop",
+            write_state="read_only",
+            terminal_attached=True,
+            reason=(
+                "电脑端 Codex 正持有此任务；Remote 已保持历史同步，"
+                "写入权释放后会自动接续"
+            ),
+            can_takeover=False,
+            emit=emit,
+        )
+
+    async def _retry_codex_writer_attach(
+        self,
+        ctx: SessionContext,
+        *,
+        force: bool = False,
+    ) -> bool:
+        """Retry an official resume after Desktop releases its writer lease."""
+        if not ctx.codex_writer_blocked:
+            return self._codex_shared_live(ctx) or bool(
+                getattr(ctx.sdk, "thread_id", None)
+            )
+        if not ctx.session_id or ctx.state != "idle":
+            return False
+        async with ctx.codex_writer_retry_lock:
+            if not ctx.codex_writer_blocked:
+                return True
+            now = asyncio.get_running_loop().time()
+            if not force and now < ctx.codex_writer_retry_at:
+                return False
+            try:
+                await ctx.sdk.connect(resume_id=ctx.session_id, cwd=ctx.cwd)
+            except CodexActiveWriterError:
+                ctx.codex_writer_retry_delay = min(
+                    max(2.0, ctx.codex_writer_retry_delay * 2.0),
+                    15.0,
+                )
+                await self._mark_codex_writer_blocked(ctx, emit=True)
+                return False
+            except Exception as exc:
+                ctx.codex_writer_retry_delay = min(
+                    max(2.0, ctx.codex_writer_retry_delay * 2.0),
+                    15.0,
+                )
+                ctx.codex_writer_retry_at = now + ctx.codex_writer_retry_delay
+                log.warning(
+                    "Codex writer handoff reconnect failed",
+                    session_id=ctx.session_id,
+                    error_type=type(exc).__name__,
+                )
+                await self._set_session_control(
+                    ctx,
+                    control_mode="desktop",
+                    write_state="read_only",
+                    terminal_attached=True,
+                    reason="Codex 接续通道暂不可用；Remote 会自动重试",
+                    can_takeover=False,
+                )
+                return False
+
+            ctx.codex_writer_blocked = False
+            ctx.codex_writer_retry_delay = 2.0
+            ctx.codex_writer_retry_at = 0.0
+            ctx.needs_reload = False
+            await self._sync_external_control(
+                ctx,
+                self._watch.get(ctx.session_id),
+            )
+            await self._emit(ctx, TakeoverState(
+                pending=False,
+                message="电脑端写入权已释放，Remote 已自动恢复可写",
+            ))
+            await self._push_mirrored_history(ctx.session_id)
+            log.info(
+                "Codex writer handoff recovered",
+                session_id=ctx.session_id,
+            )
+            return True
+
+    @staticmethod
+    async def _stop_codex_writer_retry(ctx: SessionContext) -> None:
+        task = ctx.codex_writer_retry_task
+        ctx.codex_writer_retry_task = None
+        if (task is None or task.done()
+                or task is asyncio.current_task()):
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    @staticmethod
+    def _finish_codex_writer_retry(
+        ctx: SessionContext,
+        task: asyncio.Task,
+    ) -> None:
+        if ctx.codex_writer_retry_task is task:
+            ctx.codex_writer_retry_task = None
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            log.error(
+                "Codex writer retry escaped its failure boundary",
+                session_id=ctx.session_id,
+                error_type=type(error).__name__,
+            )
+
     async def _sync_external_control(
         self,
         ctx: SessionContext,
         watch: Optional[dict],
     ) -> SessionControl:
         """Project legacy ownership detection into protocol-v15 control state."""
+        if ctx.engine == "codex" and ctx.codex_writer_blocked:
+            return await self._set_session_control(
+                ctx,
+                control_mode="desktop",
+                write_state="read_only",
+                terminal_attached=True,
+                reason=(
+                    "电脑端 Codex 正持有此任务；Remote 已保持历史同步，"
+                    "写入权释放后会自动接续"
+                ),
+                can_takeover=False,
+            )
         if getattr(ctx.sdk, "is_claude_broker", False):
             unavailable = getattr(
                 ctx.sdk, "cc_remote_unavailable_reason", None)
@@ -1722,17 +1863,13 @@ class WrapperMachine:
             if len(payload.encode("utf-8")) > self.PRIVATE_BTW_FILE_MAX_BYTES:
                 raise ValueError("private btw state exceeds size limit")
             with tmp.open("w") as stream:
-                os.fchmod(stream.fileno(), 0o600)
+                set_file_mode(stream.fileno(), tmp, 0o600)
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(tmp, path)
             # Make the rename durable, not merely atomic in the page cache.
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            fsync_directory(path.parent)
         except Exception as exc:
             try:
                 tmp.unlink()
@@ -1921,9 +2058,13 @@ class WrapperMachine:
                 except asyncio.CancelledError:
                     pass
             spontaneous_tasks = [
-                c.codex_spontaneous_task for c in self.sessions.values()
-                if c.codex_spontaneous_task is not None
-                and not c.codex_spontaneous_task.done()
+                task
+                for c in self.sessions.values()
+                for task in (
+                    c.codex_spontaneous_task,
+                    c.codex_writer_retry_task,
+                )
+                if task is not None and not task.done()
             ]
             for task in spontaneous_tasks:
                 task.cancel()
@@ -2797,6 +2938,8 @@ class WrapperMachine:
     def _is_external(self, sid: str) -> bool:
         """Whether a stable external owner (or incomplete scan) blocks Remote."""
         ctx = self._ctx_by_sid(sid)
+        if ctx is not None and ctx.codex_writer_blocked:
+            return True
         if ctx is not None and getattr(ctx.sdk, "is_claude_broker", False):
             return False
         w = self._watch.get(sid)
@@ -2826,26 +2969,29 @@ class WrapperMachine:
         *,
         timeout: float = 3.0,
     ) -> set[ProcessIdentity]:
-        """Gracefully stop exact same-user Claude CLI identities for migration.
+        """Stop exact same-user Claude CLI identities for explicit migration.
 
         This is called only from the reliable, explicit Takeover command. It
         never kills a process group (which may contain the user's shell), never
-        escalates to SIGKILL, and re-checks the cross-platform stable identity
-        immediately before SIGTERM so PID reuse cannot target another process.
+        escalates beyond the exact executable, and re-checks the cross-platform
+        stable identity immediately before termination so PID reuse cannot target
+        another process. POSIX receives SIGTERM; Windows uses a validated process
+        handle because Ctrl+C cannot safely target a child that shares its shell.
         """
         remaining: set[ProcessIdentity] = set()
+        current_owner = process_owner_uid(os.getpid())
         for identity in holders:
             current = process_identity(identity.pid)
             if current != identity:
                 continue
             owner_uid = process_owner_uid(identity.pid)
-            if owner_uid is None:
+            if owner_uid is None or current_owner is None:
                 if process_identity(identity.pid) == identity:
                     remaining.add(identity)
                 continue
-            if owner_uid != os.getuid():
+            if owner_uid != current_owner:
                 log.warning(
-                    "refusing to migrate Claude process owned by another uid",
+                    "refusing to migrate Claude process owned by another user",
                     pid=identity.pid,
                 )
                 remaining.add(identity)
@@ -2853,13 +2999,25 @@ class WrapperMachine:
             if process_identity(identity.pid) != identity:
                 continue
             try:
-                os.kill(identity.pid, signal.SIGTERM)
+                if os.name == "nt":
+                    if not terminate_exact_process(identity):
+                        continue
+                else:
+                    os.kill(identity.pid, signal.SIGTERM)
             except ProcessLookupError:
                 continue
             except PermissionError:
                 log.warning(
                     "permission denied while migrating Claude process",
                     pid=identity.pid,
+                )
+                remaining.add(identity)
+                continue
+            except OSError as exc:
+                log.warning(
+                    "failed to migrate exact Claude process",
+                    pid=identity.pid,
+                    error_type=type(exc).__name__,
                 )
                 remaining.add(identity)
                 continue
@@ -3871,6 +4029,21 @@ class WrapperMachine:
                             and ctx.session_id not in self._watch):
                         self._watch_session(ctx.session_id)
                 await self._poll_watches_once()
+                for ctx in list(self.sessions.values()):
+                    if (not ctx.codex_writer_blocked
+                            or (ctx.codex_writer_retry_task is not None
+                                and not ctx.codex_writer_retry_task.done())
+                            or asyncio.get_running_loop().time()
+                                < ctx.codex_writer_retry_at):
+                        continue
+                    task = asyncio.create_task(
+                        self._retry_codex_writer_attach(ctx)
+                    )
+                    ctx.codex_writer_retry_task = task
+                    task.add_done_callback(
+                        lambda done, current=ctx:
+                            self._finish_codex_writer_retry(current, done)
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -4757,6 +4930,18 @@ class WrapperMachine:
             error = Error(code=ERR_NOT_RUNNING, message="该会话尚无可接管的会话 ID")
             await self._emit(ctx, error)
             return error
+        if ctx.engine == "codex" and ctx.codex_writer_blocked:
+            error = Error(
+                code=ERR_BUSY,
+                message=(
+                    "电脑端 Codex 仍持有此任务；Remote 会在写入权释放后"
+                    "自动恢复，无需强制接管"
+                ),
+            )
+            await self._sync_external_control(
+                ctx, self._watch.get(resolved_sid))
+            await self._emit(ctx, error)
+            return error
         existing_watch = self._watch.get(resolved_sid)
         if (ctx.engine == "codex"
                 and bool((existing_watch or {}).get("desktop_active"))):
@@ -4860,8 +5045,8 @@ class WrapperMachine:
                     await self._sync_external_control(ctx, w)
                     await self._emit(ctx, TakeoverState(
                         pending=True,
-                        message=("正在安全结束本机 Claude CLI，并把最新历史迁移给 "
-                                 "Remote；不会终止终端 Shell"),
+                        message=("正在结束当前会话对应的本机 Claude 进程，并把最新历史"
+                                 "迁移给 Remote；不会终止终端 Shell 或其他会话"),
                     ))
                     remaining = await self._terminate_external_claude_holders(
                         holders)
@@ -4974,7 +5159,11 @@ class WrapperMachine:
                     ctx, reason="query preflight")):
             error = Error(
                 code=ERR_NOT_RUNNING,
-                message="Codex 共享通道重连失败，本次未发送；请重试",
+                message=(
+                    "电脑端 Codex 仍持有此任务；本次未发送，释放后会自动恢复"
+                    if ctx.codex_writer_blocked else
+                    "Codex 共享通道重连失败，本次未发送；请重试"
+                ),
                 msg_id=getattr(cmd, "msg_id", None),
             )
             await self._emit(ctx, error)
@@ -8027,7 +8216,9 @@ class WrapperMachine:
                 written = 0
                 while written < len(view):
                     written += os.write(temp_fd, view[written:])
-                os.fchmod(temp_fd, stat.S_IMODE(original_stat.st_mode))
+                set_file_mode(
+                    temp_fd, None, stat.S_IMODE(original_stat.st_mode)
+                )
                 os.fsync(temp_fd)
             finally:
                 os.close(temp_fd)
@@ -9325,6 +9516,7 @@ class WrapperMachine:
                         error_type=type(exc).__name__,
                     )
         if ctx is not None:
+            await self._stop_codex_writer_retry(ctx)
             try:
                 await ctx.sdk.disconnect()
             except Exception:
@@ -11629,6 +11821,7 @@ class WrapperMachine:
                     ERR_BUSY, "所有会话都在运行,先中断一个再切换")
                 return None
             vc = self.sessions.pop(victim)
+            await self._stop_codex_writer_retry(vc)
             try:
                 await vc.sdk.disconnect()
             except Exception:
@@ -11862,8 +12055,25 @@ class WrapperMachine:
             ctx.sdk.runtime_event_callback = (
                 lambda event: self._on_codex_runtime_event(ctx, event))
 
+        writer_blocked = False
         try:
             await ctx.sdk.connect(resume_id=resume_id, cwd=target_cwd)
+        except CodexActiveWriterError as exc:
+            if engine == "codex" and space == "code" and resume_id:
+                writer_blocked = True
+                log.info(
+                    "Codex resume deferred behind active Desktop writer",
+                    session_id=resume_id,
+                )
+            else:
+                log.warning(
+                    "Codex writer conflict on unsupported spawn path",
+                    engine=engine,
+                    space=space,
+                    error_type=type(exc).__name__,
+                )
+                await reject(ERR_BUSY, "Codex 会话正由电脑端使用，请稍后重试。")
+                return None
         except Exception as e:
             if bootstrap and resume_id:
                 log.warning("resume failed, starting a fresh session", error=str(e))
@@ -11941,19 +12151,22 @@ class WrapperMachine:
             ctx.sdk.approval = "never"
 
         if engine == "codex" and space == "code":
-            await self._set_session_control(
-                ctx,
-                control_mode=(
-                    "codex_shared"
-                    if self._codex_shared_affinity(ctx)
-                    else "remote"
-                ),
-                write_state="writable",
-                terminal_attached=False,
-                reason=None,
-                can_takeover=False,
-                emit=False,
-            )
+            if writer_blocked:
+                await self._mark_codex_writer_blocked(ctx, emit=False)
+            else:
+                await self._set_session_control(
+                    ctx,
+                    control_mode=(
+                        "codex_shared"
+                        if self._codex_shared_affinity(ctx)
+                        else "remote"
+                    ),
+                    write_state="writable",
+                    terminal_attached=False,
+                    reason=None,
+                    can_takeover=False,
+                    emit=False,
+                )
 
         # cc model is a runtime switch on the live subprocess (set_model), so apply
         # a pre-selected model now that we're connected. codex was set pre-connect.
@@ -12045,6 +12258,7 @@ class WrapperMachine:
             if victim is None:
                 raise _BtwSpawnFailure(ERR_BUSY, "会话已满,先关闭一个再开 btw")
             vc = self.sessions.pop(victim)
+            await self._stop_codex_writer_retry(vc)
             try:
                 await vc.sdk.disconnect()
             except Exception:
@@ -12279,7 +12493,8 @@ class WrapperMachine:
                         if entry.is_symlink():
                             continue
                         info = entry.stat(follow_symlinks=False)
-                        if info.st_uid != os.getuid() or info.st_mtime >= cutoff:
+                        if (not owned_by_current_user(info)
+                                or info.st_mtime >= cutoff):
                             continue
                         if turn_dir.fullmatch(entry.name) and entry.is_dir(
                                 follow_symlinks=False):

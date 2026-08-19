@@ -9,6 +9,8 @@ import stat
 import tempfile
 import uuid
 
+from cc_remote.file_lock import has_private_owner_mode, set_file_mode
+
 
 MAX_STORE_BYTES = 256 * 1024
 MAX_STORED_SESSIONS = 1024
@@ -46,8 +48,7 @@ class ControlStore:
         except FileNotFoundError:
             return
         if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
-                or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) & 0o077
+                or not has_private_owner_mode(info)
                 or info.st_size > MAX_STORE_BYTES):
             raise ControlStoreError("Claude control store is not a private regular file")
         try:
@@ -108,8 +109,7 @@ class ControlStore:
         parent = self.path.parent
         info = parent.lstat()
         if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
-                or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) & 0o077):
+                or not has_private_owner_mode(info)):
             raise ControlStoreError("Claude control store directory is unsafe")
         payload = json.dumps(
             {"version": STORE_VERSION, "sessions": self._sessions},
@@ -121,7 +121,7 @@ class ControlStore:
             raise ControlStoreError("Claude control store exceeds its size limit")
         fd, temporary = tempfile.mkstemp(prefix=".controls-", dir=parent)
         try:
-            os.fchmod(fd, 0o600)
+            set_file_mode(fd, temporary, 0o600)
             with os.fdopen(fd, "wb", closefd=True) as stream:
                 fd = -1
                 stream.write(payload)

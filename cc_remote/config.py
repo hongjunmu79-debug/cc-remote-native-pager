@@ -11,12 +11,12 @@ import math
 import json
 import os
 import re
-import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from cc_remote.claude_broker.paths import default_socket_path
+from cc_remote.file_lock import has_private_owner_mode
 
 try:
     from dotenv import load_dotenv
@@ -58,8 +58,7 @@ def _load_device_config() -> dict[str, str]:
     path = device_config_path()
     if not path.exists():
         return {}
-    mode = stat.S_IMODE(path.stat().st_mode)
-    if mode & 0o077:
+    if not has_private_owner_mode(path.stat()):
         raise ValueError(
             f"device credential file must not be accessible by group/others: {path}")
     try:
@@ -218,6 +217,11 @@ class WrapperConfig:
     )
     transport_send_bytes: int = field(
         default_factory=lambda: _int("WRAPPER_SEND_QUEUE_BYTES", 32 * 1024 * 1024)
+    )
+    # The relay is normally on the same machine or LAN. Keep outage recovery
+    # bounded without busy-looping when the relay is intentionally offline.
+    reconnect_max_seconds: float = field(
+        default_factory=lambda: _float("WRAPPER_RECONNECT_MAX_SECONDS", 10.0)
     )
     ws_max_size_bytes: int = field(default_factory=lambda: _int("WS_MAX_SIZE_BYTES", 16 * 1024 * 1024))
     # Consumer-facing per-turn queue. CodexHandle derives a separate bounded
@@ -544,6 +548,9 @@ def validate_wrapper_config(cfg: WrapperConfig) -> None:
         errors.append("WRAPPER_INBOX_BYTES must be at least WS_MAX_SIZE_BYTES")
     if cfg.transport_send_bytes < cfg.ws_max_size_bytes:
         errors.append("WRAPPER_SEND_QUEUE_BYTES must be at least WS_MAX_SIZE_BYTES")
+    if not (1 <= cfg.reconnect_max_seconds <= 300):
+        errors.append(
+            "WRAPPER_RECONNECT_MAX_SECONDS must be between 1 and 300")
     if not (1 <= cfg.max_concurrent_sessions <= 64):
         errors.append("MAX_CONCURRENT_SESSIONS must be between 1 and 64")
     if not (4 <= cfg.ring_max_events <= 1_000_000):

@@ -35,6 +35,8 @@ def test_wrapper_startup_config_fails_closed():
         validate_wrapper_config(_wrapper_cfg(relay_url="wss://relay.example/other"))
     with pytest.raises(ValueError, match="WRAPPER_INBOX_BYTES"):
         validate_wrapper_config(_wrapper_cfg(transport_inbox_bytes=1024))
+    with pytest.raises(ValueError, match="WRAPPER_RECONNECT_MAX_SECONDS"):
+        validate_wrapper_config(_wrapper_cfg(reconnect_max_seconds=0.5))
     with pytest.raises(ValueError, match="MAX_CONCURRENT_SESSIONS"):
         validate_wrapper_config(_wrapper_cfg(max_concurrent_sessions=0))
     with pytest.raises(ValueError, match="RING_MAX_EVENTS"):
@@ -74,12 +76,14 @@ def test_wrapper_transport_queues_and_frame_size_are_bounded():
         max_size=12345,
         inbox_bytes=23456,
         send_bytes=34567,
+        reconnect_max_seconds=7.5,
     )
     assert transport._inbox.maxsize == 7
     assert transport._send_q.maxsize == 11
     assert transport._inbox.max_bytes == 23456
     assert transport._send_q.max_bytes == 34567
     assert transport.max_size == 12345
+    assert transport.reconnect_max_seconds == 7.5
 
 
 def test_transport_byte_backpressure_and_stop_wake_waiters():

@@ -715,14 +715,21 @@ class HistoryIndexStore:
             os.chmod(self.path.parent, 0o700)
         except OSError:
             pass
-        connection = sqlite3.connect(self.path, timeout=5)
+        # History pages are materialized concurrently in worker threads. A
+        # longer busy window is safe because callers use asyncio.to_thread and
+        # prevents a large rollout write from turning a simultaneous refresh
+        # into a user-visible warning on Windows.
+        connection = sqlite3.connect(self.path, timeout=15)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=5000")
-        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=15000")
         return connection
 
     def _ensure_schema(self) -> None:
         with self._connect() as connection:
+            # Journal mode is database-wide. Negotiating it for every
+            # short-lived reader requires an exclusive lock and was itself a
+            # source of SQLITE_BUSY under concurrent catalog refreshes.
+            connection.execute("PRAGMA journal_mode=WAL")
             current = int(connection.execute("PRAGMA user_version").fetchone()[0])
             migrate_codex_only = current == _CODEX_ONLY_MIGRATION_VERSION
             if current not in (

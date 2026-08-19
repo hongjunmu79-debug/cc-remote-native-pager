@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from cc_remote.wrapper.claude_external import (
     classify_claude_growth,
 )
 from cc_remote.wrapper.codex_external import HolderScan, ProcessIdentity
+from cc_remote.wrapper.process_scan import WindowsProcessInfo
 from tests.test_multisession import _mk_ctx, _mk_machine
 
 
@@ -546,6 +548,122 @@ def test_claude_scan_on_darwin_rejects_reused_pid(monkeypatch):
     assert scan.holders == {"sid": set()}
 
 
+def _windows_scan(monkeypatch, tmp_path, processes, parent_by_pid=None,
+                  identities=None):
+    monkeypatch.setattr(claude_external_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        claude_external_module,
+        "windows_process_snapshot",
+        lambda: (processes, parent_by_pid or {
+            info.identity.pid: info.parent_pid for info in processes
+        }, True),
+    )
+    stable = identities or {info.identity.pid: info.identity for info in processes}
+    monkeypatch.setattr(
+        claude_external_module, "process_identity", lambda pid: stable.get(pid))
+    return tmp_path / "sessions"
+
+
+def _windows_session_record(root, identity, sid, cwd="C:\\workspace"):
+    root.mkdir(exist_ok=True)
+    (root / f"{identity.pid}.json").write_text(json.dumps({
+        "pid": identity.pid,
+        "sessionId": sid,
+        "cwd": cwd,
+        "procStart": str(identity.start_ticks),
+        "kind": "interactive",
+        "entrypoint": "cli",
+    }))
+
+
+def test_claude_scan_on_windows_uses_pid_registry_and_excludes_wrapper_tree(
+        monkeypatch, tmp_path):
+    sid = "session-windows"
+    external = ProcessIdentity(501, 50_001)
+    wrapper_child = ProcessIdentity(502, 50_002)
+    processes = [
+        WindowsProcessInfo(external, 1, (b"claude.exe",)),
+        WindowsProcessInfo(wrapper_child, 900, (
+            b"claude.exe", b"--resume", sid.encode())),
+    ]
+    root = _windows_scan(monkeypatch, tmp_path, processes)
+    _windows_session_record(root, external, sid)
+    _windows_session_record(root, wrapper_child, sid)
+
+    scan = claude_session_holders(
+        {sid: "unused"}, {sid: "C:\\workspace"}, wrapper_pid=900,
+        windows_session_root=str(root),
+    )
+
+    assert scan.complete is True
+    assert scan.holders == {sid: {external}}
+
+
+def test_claude_scan_on_windows_rejects_stale_or_contradictory_registry(
+        monkeypatch, tmp_path):
+    sid = "session-windows"
+    stale = ProcessIdentity(511, 51_001)
+    conflict = ProcessIdentity(512, 51_002)
+    processes = [
+        WindowsProcessInfo(stale, 1, (b"claude.exe",)),
+        WindowsProcessInfo(conflict, 1, (
+            b"claude.exe", b"--resume", sid.encode())),
+    ]
+    root = _windows_scan(monkeypatch, tmp_path, processes)
+    _windows_session_record(root, ProcessIdentity(stale.pid, 99_999), sid)
+    _windows_session_record(root, conflict, "different-session")
+
+    scan = claude_session_holders(
+        {sid: "unused"}, {sid: "C:\\workspace"}, wrapper_pid=900,
+        windows_session_root=str(root),
+    )
+
+    assert scan.complete is False
+    assert scan.holders == {sid: set()}
+
+
+def test_claude_scan_on_windows_allows_explicit_target_before_registry_publish(
+        monkeypatch, tmp_path):
+    sid = "session-windows"
+    identity = ProcessIdentity(521, 52_001)
+    root = _windows_scan(monkeypatch, tmp_path, [
+        WindowsProcessInfo(identity, 1, (
+            b"claude.exe", b"--resume", sid.encode())),
+    ])
+
+    scan = claude_session_holders(
+        {sid: "unused"}, {sid: "C:\\workspace"}, wrapper_pid=900,
+        windows_session_root=str(root),
+    )
+
+    assert scan.complete is True
+    assert scan.holders == {sid: {identity}}
+
+
+def test_claude_scan_on_windows_ignores_unrelated_explicit_session(
+        monkeypatch, tmp_path):
+    watched_sid = "session-windows"
+    watched = ProcessIdentity(531, 53_001)
+    unrelated = ProcessIdentity(532, 53_002)
+    unrelated_sid = "another-session"
+    processes = [
+        WindowsProcessInfo(watched, 1, (b"claude.exe",)),
+        WindowsProcessInfo(unrelated, 1, (
+            b"claude.exe", b"--resume", unrelated_sid.encode())),
+    ]
+    root = _windows_scan(monkeypatch, tmp_path, processes)
+    _windows_session_record(root, watched, watched_sid)
+    _windows_session_record(root, unrelated, unrelated_sid)
+
+    scan = claude_session_holders(
+        {watched_sid: "unused"}, {watched_sid: "C:\\workspace"},
+        wrapper_pid=900, windows_session_root=str(root),
+    )
+
+    assert scan.complete is True
+    assert scan.holders == {watched_sid: {watched}}
+
+
 def test_claude_takeover_signals_only_same_identity_and_uid(monkeypatch):
     async def run():
         machine, _ = _mk_machine()
@@ -559,15 +677,29 @@ def test_claude_takeover_signals_only_same_identity_and_uid(monkeypatch):
 
         signals = []
         monkeypatch.setattr(machine_module, "process_identity", current)
+        owner = (
+            "S-1-test" if machine_module.os.name == "nt"
+            else machine_module.os.getuid()
+        )
         monkeypatch.setattr(
-            machine_module, "process_owner_uid", lambda _pid: machine_module.os.getuid())
-        monkeypatch.setattr(
-            machine_module.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+            machine_module, "process_owner_uid", lambda _pid: owner)
+        if machine_module.os.name == "nt":
+            monkeypatch.setattr(
+                machine_module,
+                "terminate_exact_process",
+                lambda value: signals.append((value.pid, "exact")) or True,
+            )
+        else:
+            monkeypatch.setattr(
+                machine_module.os, "kill", lambda pid, sig: signals.append((pid, sig)))
 
         remaining = await machine._terminate_external_claude_holders(
             {identity}, timeout=0.1)
         assert remaining == set()
-        assert signals == [(identity.pid, machine_module.signal.SIGTERM)]
+        assert signals == [(
+            identity.pid,
+            "exact" if machine_module.os.name == "nt" else machine_module.signal.SIGTERM,
+        )]
 
     asyncio.run(run())
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 from cc_remote.wrapper.history_store import (
     HistoryIndexStore,
@@ -169,6 +170,25 @@ def test_history_index_is_bounded_and_invalidatable(tmp_path):
     assert store.get_page(
         "session-2", "claude", source, before=None, limit=4) is None
     assert oct(os.stat(store.path).st_mode & 0o777) == "0o600"
+
+
+def test_history_index_serializes_concurrent_windows_style_refreshes(tmp_path):
+    source_path = tmp_path / "transcript.jsonl"
+    source_path.write_text("{}\n")
+    source = HistorySourceFingerprint.capture(source_path)
+    store = HistoryIndexStore(tmp_path / "state", max_entries=64)
+
+    def refresh(index: int) -> bool:
+        return store.put_page(
+            f"session-{index % 8}", "codex", source,
+            before=None, limit=4, page=_page(f"page-{index}"),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        assert all(executor.map(refresh, range(64)))
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
 def test_v6_migration_invalidates_only_codex_derived_rows(tmp_path):
