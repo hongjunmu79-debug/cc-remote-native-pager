@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.muggle.cc-remote.wrapper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CURRENT__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>cc_remote.wrapper</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__CURRENT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHON_DOTENV_DISABLED</key>
+    <string>1</string>
+    <key>CC_CWD</key>
+    <string>__HOME__</string>
+    <key>CC_REMOTE_CODEX_DAEMON</key>
+    <string>auto</string>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:__HOME__/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/wrapper.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/wrapper.stderr.log</string>
+</dict>
+</plist>

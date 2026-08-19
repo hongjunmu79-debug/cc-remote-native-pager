@@ -1,0 +1,50 @@
+#!/bin/sh
+# Unsupported PTY broker experiment. This is intentionally not installed or
+# documented as a customer feature.
+set -eu
+
+case "${CC_REMOTE_EXPERIMENTAL_CLAUDE_BROKER:-}" in
+    1|true|TRUE|yes|YES|on|ON) ;;
+    *)
+        echo "claude-remote is an unsupported experimental command." >&2
+        echo "Use the official 'claude' command; cc-remote mirrors it read-only and supports explicit takeover." >&2
+        exit 64
+        ;;
+esac
+
+SCRIPT_PATH=$0
+while [ -h "$SCRIPT_PATH" ]; do
+    LINK_DIR=$(CDPATH='' cd -P -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
+    LINK_TARGET=$(readlink "$SCRIPT_PATH")
+    case "$LINK_TARGET" in
+        /*) SCRIPT_PATH=$LINK_TARGET ;;
+        *) SCRIPT_PATH=$LINK_DIR/$LINK_TARGET ;;
+    esac
+done
+
+SCRIPT_DIR=$(CDPATH='' cd -P -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
+REPO_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+PYTHON=${CC_REMOTE_PYTHON:-"$REPO_DIR/.venv/bin/python"}
+
+# The wrapper commonly runs as a system service without XDG_RUNTIME_DIR while
+# an interactive terminal has one. Pin this opt-in experiment to a stable
+# per-user endpoint unless its operator explicitly configured another path.
+if [ -z "${CC_REMOTE_CLAUDE_BROKER_SOCKET:-}" ]; then
+    CC_REMOTE_CLAUDE_BROKER_SOCKET=$HOME/.cc-remote/claude-broker.sock
+    export CC_REMOTE_CLAUDE_BROKER_SOCKET
+fi
+
+if [ ! -x "$PYTHON" ]; then
+    echo "claude-remote: Python runtime not found: $PYTHON" >&2
+    echo "set CC_REMOTE_PYTHON or create $REPO_DIR/.venv" >&2
+    exit 127
+fi
+
+if [ -n "${PYTHONPATH:-}" ]; then
+    PYTHONPATH=$REPO_DIR:$PYTHONPATH
+else
+    PYTHONPATH=$REPO_DIR
+fi
+export PYTHONPATH
+
+exec "$PYTHON" -m cc_remote.claude_remote "$@"

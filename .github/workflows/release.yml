@@ -1,0 +1,266 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify source release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+      - name: Verify tag and product versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from cc_remote import __version__
+
+          expected = f"v{__version__}"
+          if os.environ["RELEASE_TAG"] != expected:
+              raise SystemExit(
+                  f"release tag {os.environ['RELEASE_TAG']!r} != {expected!r}"
+              )
+          package = json.loads(Path("web/package.json").read_text())
+          lock = json.loads(Path("web/package-lock.json").read_text())
+          if package["version"] != __version__:
+              raise SystemExit("web/package.json version does not match backend")
+          if lock["version"] != __version__:
+              raise SystemExit("web/package-lock.json version does not match backend")
+          PY
+      - name: Install Python test dependencies
+        run: |
+          uv venv --python 3.13 .venv
+          uv pip sync \
+            --python .venv/bin/python \
+            --require-hashes --only-binary=:all: --no-binary=http-ece \
+            requirements.lock
+          uv pip install --python .venv/bin/python -r requirements-dev.txt
+      - name: Materialize Web client for release tests
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+      - name: Python tests and lint
+        run: |
+          .venv/bin/python -m pytest
+          uvx --from ruff==0.15.13 ruff check cc_remote tests deploy
+      - name: Web tests and lint
+        run: |
+          npm --prefix web run test:reliability
+          npm --prefix web run lint
+      - name: Release script syntax
+        run: |
+          bash -n \
+            deploy/install.sh \
+            deploy/install-relay.sh \
+            deploy/install-wrapper.sh \
+            deploy/setup-vps.sh
+          shellcheck -x \
+            deploy/install.sh \
+            deploy/install-relay.sh \
+            deploy/install-wrapper.sh \
+            deploy/setup-vps.sh \
+            deploy/setup_transaction.sh
+          git diff --check
+
+  build:
+    name: Build ${{ matrix.role }} ${{ matrix.os }}/${{ matrix.arch }}
+    needs: verify
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: relay
+            os: linux
+            arch: x86_64
+            runner: ubuntu-24.04
+            expected_uname: x86_64
+          - role: relay
+            os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            expected_uname: aarch64
+          - role: wrapper
+            os: linux
+            arch: x86_64
+            runner: ubuntu-24.04
+            expected_uname: x86_64
+          - role: wrapper
+            os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            expected_uname: aarch64
+          - role: wrapper
+            os: darwin
+            arch: x86_64
+            runner: macos-15-intel
+            expected_uname: x86_64
+          - role: wrapper
+            os: darwin
+            arch: arm64
+            runner: macos-15
+            expected_uname: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_UNAME: ${{ matrix.expected_uname }}
+        run: test "$(uname -m)" = "$EXPECTED_UNAME"
+      - name: Build Relay web client
+        if: matrix.role == 'relay'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Materialize Relay web client
+        if: matrix.role == 'relay'
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+      - name: Build deterministic role bundle
+        env:
+          RELEASE_ROLE: ${{ matrix.role }}
+          RELEASE_OS: ${{ matrix.os }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          python -m deploy.build_release \
+            --output-dir dist \
+            --role "$RELEASE_ROLE" \
+            --os "$RELEASE_OS" \
+            --arch "$RELEASE_ARCH" \
+            --uv-bin "$(command -v uv)" \
+            --git-sha "$GITHUB_SHA" \
+            --source-date-epoch "$source_date_epoch"
+          tar -tzf dist/*.tar.gz >/dev/null
+      - name: Install and import the packaged role
+        env:
+          RELEASE_ROLE: ${{ matrix.role }}
+          RELEASE_OS: ${{ matrix.os }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          smoke="$(mktemp -d)"
+          tar -xzf dist/*.tar.gz -C "$smoke"
+          bundle="$smoke/cc-remote-$RELEASE_ROLE-${GITHUB_REF_NAME}"
+          test -x "$bundle/bin/uv"
+          "$bundle/bin/uv" --version
+          python_runtime="$(cat deploy/python-version.txt)"
+          UV_PYTHON_INSTALL_DIR="$smoke/python" \
+            "$bundle/bin/uv" venv \
+            --no-project --managed-python --python "$python_runtime" \
+            "$bundle/.smoke-venv"
+          "$bundle/bin/uv" pip sync \
+            --python "$bundle/.smoke-venv/bin/python" \
+            --require-hashes --only-binary=:all: --no-binary=http-ece \
+            "$bundle/requirements-$RELEASE_ROLE.lock"
+          (
+            cd "$bundle"
+            PYTHONPATH="$bundle" "$bundle/.smoke-venv/bin/python" \
+              -m deploy.release_manifest "$bundle" \
+              --role "$RELEASE_ROLE" --os "$RELEASE_OS" --arch "$RELEASE_ARCH"
+            if [ "$RELEASE_ROLE" = wrapper ]; then
+              PYTHONPATH="$bundle" "$bundle/.smoke-venv/bin/python" -c \
+                'from cc_remote.wrapper.machine import WrapperMachine; assert WrapperMachine'
+            else
+              PYTHONPATH="$bundle" "$bundle/.smoke-venv/bin/python" -c \
+                'from cc_remote.relay.server import create_app; assert create_app'
+            fi
+          )
+          rm -rf -- "$smoke"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.role }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Attest and publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+      - name: Assemble checksummed release assets
+        run: |
+          cp deploy/install.sh dist/install.sh
+          chmod 0755 dist/install.sh
+          (
+            cd dist
+            printf '%s\n' cc-remote-*.tar.gz install.sh |
+              sort | xargs sha256sum > SHA256SUMS
+          )
+          test "$(find dist -name 'cc-remote-*.tar.gz' | wc -l)" -eq 6
+      - name: Attest release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist/*"
+      - name: Create draft, upload assets, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)"
+            test "$is_draft" = true || {
+              echo "refusing to replace an already-published release" >&2
+              exit 1
+            }
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --draft \
+              --title "cc-remote $RELEASE_TAG" \
+              --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

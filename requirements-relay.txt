@@ -1,0 +1,4 @@
+-r requirements-common.txt
+fastapi==0.139.0
+uvicorn==0.50.0
+pywebpush==2.3.0

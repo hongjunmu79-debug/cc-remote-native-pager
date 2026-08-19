@@ -1,0 +1,40 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "3.0.0",
+  "author": "muggle",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "test:compile": "tsc -p tsconfig.tests.json",
+    "test:outbox": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/outbox.test.js",
+    "test:scroll": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/scroll-follow.test.js",
+    "test:history-browser": "playwright test -c playwright.config.ts",
+    "test:diff": "npm run test:compile --silent && node --expose-gc node_modules/.tmp/cc-remote-tests/tests/diff-performance.test.js",
+    "test:preview": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/markdown-preview.test.js",
+    "test:reliability": "npm run test:compile --silent && node node_modules/.tmp/cc-remote-tests/tests/outbox.test.js && node node_modules/.tmp/cc-remote-tests/tests/history-requests.test.js && node node_modules/.tmp/cc-remote-tests/tests/reliability.test.js && node --expose-gc node_modules/.tmp/cc-remote-tests/tests/diff-performance.test.js && node node_modules/.tmp/cc-remote-tests/tests/goal-command.test.js && node node_modules/.tmp/cc-remote-tests/tests/status-capabilities.test.js && node node_modules/.tmp/cc-remote-tests/tests/notices-rate-limits.test.js && node node_modules/.tmp/cc-remote-tests/tests/session-worktree.test.js && node node_modules/.tmp/cc-remote-tests/tests/scroll-follow.test.js && node node_modules/.tmp/cc-remote-tests/tests/markdown-preview.test.js",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "3.14.8",
+    "dompurify": "^3.4.12",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "shiki": "^4.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "oxlint": "^1.71.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  }
+}

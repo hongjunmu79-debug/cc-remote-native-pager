@@ -1,0 +1,44 @@
+[Unit]
+Description=cc-remote relay (WebSocket relay + static web client)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ccremote
+Group=ccremote
+WorkingDirectory=/opt/cc-remote/current
+EnvironmentFile=/opt/cc-remote/.env
+ExecStart=/opt/cc-remote/current/.venv/bin/python -m cc_remote.relay
+Restart=on-failure
+RestartSec=3
+UMask=0077
+LimitCORE=0
+
+# Relay only reads the current immutable release, shared .env, and static web
+# build under /opt. The dedicated state directory is the sole persistent
+# writable path and holds Web Push subscriptions plus the hashed device
+# enrollment registry. Conversation/session data never enters either database.
+# Keep all other paths visible but read-only; private /tmp remains available to
+# Python and uploaded request bodies.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ReadWritePaths=/opt/cc-remote/state
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
