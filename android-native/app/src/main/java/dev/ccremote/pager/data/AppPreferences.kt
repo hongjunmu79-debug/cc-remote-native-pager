@@ -37,6 +37,12 @@ data class ServerEndpoint private constructor(
             require(uri.host?.isNotBlank() == true && uri.userInfo == null) {
                 "地址缺少有效主机或包含用户信息"
             }
+            // An explicit port must be a real TCP port: 0 and anything above
+            // 65535 (e.g. 65536, 70000) is rejected so a malformed endpoint can
+            // never reach the bridge. An omitted port is -1 and stays valid.
+            require(uri.port == -1 || uri.port in 1..65535) {
+                "端口必须在 1..65535 之间"
+            }
             require(uri.rawQuery == null && uri.rawFragment == null) {
                 "地址不能包含查询参数或片段"
             }
@@ -52,17 +58,36 @@ data class ServerEndpoint private constructor(
                     "明文 HTTP 仅允许私有或本地 IP 地址（如 192.168.x.x）"
                 }
             }
+            // The canonical host is lowercased and its DNS trailing root dot is
+            // stripped in BOTH the stored url and the origin, so bridge
+            // navigation and OriginPolicy enforcement agree on the exact same
+            // host (an uppercase or root-dot form would otherwise never match
+            // the WebView's reported origin). Ports use the same default-port
+            // elision OriginPolicy applies, so an explicit default port and an
+            // omitted one are the same origin.
+            val canonicalHost = canonicalDnsHost(uri.host)
+                ?: throw IllegalArgumentException("地址缺少有效主机")
             val defaultPort = if (uri.scheme == "https") 443 else 80
+            val url = buildString {
+                append(uri.scheme)
+                append("://")
+                append(canonicalHost)
+                if (uri.port != -1) {
+                    append(':')
+                    append(uri.port)
+                }
+                append('/')
+            }
             val origin = buildString {
                 append(uri.scheme)
                 append("://")
-                append(uri.host)
+                append(canonicalHost)
                 if (uri.port != -1 && uri.port != defaultPort) {
                     append(':')
                     append(uri.port)
                 }
             }
-            ServerEndpoint(normalized, origin)
+            ServerEndpoint(url, origin)
         }
 
         /** The build-time default endpoint, or null when the build ships no
@@ -87,6 +112,13 @@ internal fun isPrivateOrLocalIpLiteral(host: String?): Boolean {
         (a == 192 && b == 168) ||
         a == 127
 }
+
+/** Lowercases [host] and strips a DNS trailing root dot (`example.com.` →
+ *  `example.com`) so the stored bridge url and OriginPolicy enforcement
+ *  canonicalize the host identically. Returns null when [host] is blank. */
+internal fun canonicalDnsHost(host: String?): String? =
+    host?.trim()?.lowercase()?.trimEnd('.')?.takeIf { it.isNotEmpty() }
+
 class AppPreferences(
     private val context: Context,
     private val json: Json = Json,

@@ -1,6 +1,7 @@
 package dev.ccremote.pager.web
 
 import dev.ccremote.pager.data.ServerEndpoint
+import dev.ccremote.pager.data.canonicalDnsHost
 
 /**
  * Exact-origin enforcement for the pager WebView.
@@ -34,7 +35,7 @@ object OriginPolicy {
     fun originOf(scheme: String?, host: String?, port: Int): String? {
         if (scheme == null) return null
         val defaultPort = defaultPortFor(scheme) ?: return null
-        val normalizedHost = host?.trim()?.lowercase()?.trimEnd('.')
+        val normalizedHost = canonicalDnsHost(host)
         if (normalizedHost.isNullOrEmpty()) return null
         val effective = if (port != -1) port else defaultPort
         if (effective !in 1..65535) return null

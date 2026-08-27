@@ -33,6 +33,52 @@ class ServerEndpointTest {
     }
 
     @Test
+    fun `host is canonicalized to lowercase in both url and origin`() {
+        val endpoint = ServerEndpoint.parse("https://REMOTE.EXAMPLE.COM:8443").getOrThrow()
+        assertEquals("https://remote.example.com:8443/", endpoint.url)
+        assertEquals("https://remote.example.com:8443", endpoint.origin)
+    }
+
+    @Test
+    fun `one trailing DNS dot is stripped in both url and origin`() {
+        val endpoint = ServerEndpoint.parse("https://remote.example.com.:8443").getOrThrow()
+        assertEquals("https://remote.example.com:8443/", endpoint.url)
+        assertEquals("https://remote.example.com:8443", endpoint.origin)
+
+        val uppercaseAndDot = ServerEndpoint.parse("https://REMOTE.EXAMPLE.COM.:8443").getOrThrow()
+        assertEquals("https://remote.example.com:8443/", uppercaseAndDot.url)
+        assertEquals("https://remote.example.com:8443", uppercaseAndDot.origin)
+    }
+
+    @Test
+    fun `explicit default ports are elided from the origin`() {
+        // The url keeps what the user typed (canonical host, explicit default
+        // port); the origin elides it, so https://x:443 and https://x are the
+        // same origin for OriginPolicy while the bridge still loads the
+        // explicitly-requested port.
+        val httpDefault = ServerEndpoint.parse("http://192.168.1.23:80").getOrThrow()
+        assertEquals("http://192.168.1.23:80/", httpDefault.url)
+        assertEquals("http://192.168.1.23", httpDefault.origin)
+
+        val httpsDefault = ServerEndpoint.parse("https://remote.example.com:443").getOrThrow()
+        assertEquals("https://remote.example.com:443/", httpsDefault.url)
+        assertEquals("https://remote.example.com", httpsDefault.origin)
+    }
+
+    @Test
+    fun `ports outside 1-65535 including zero are rejected`() {
+        assertTrue(ServerEndpoint.parse("http://192.168.1.23:0").isFailure)
+        assertTrue(ServerEndpoint.parse("http://192.168.1.23:65536").isFailure)
+        assertTrue(ServerEndpoint.parse("http://192.168.1.23:70000").isFailure)
+        assertTrue(ServerEndpoint.parse("https://remote.example.com:0").isFailure)
+        assertTrue(ServerEndpoint.parse("https://remote.example.com:65536").isFailure)
+        assertTrue(ServerEndpoint.parse("https://remote.example.com:70000").isFailure)
+        // A port that overflows the Java URI int port still leaves no usable
+        // host, so it must also be rejected.
+        assertTrue(ServerEndpoint.parse("https://remote.example.com:99999999999999").isFailure)
+    }
+
+    @Test
     fun `rejects insecure untrusted and malformed variants`() {
         // Public HTTP origins (hostnames and public IPs) are always rejected.
         assertTrue(ServerEndpoint.parse("http://example.com").isFailure)
