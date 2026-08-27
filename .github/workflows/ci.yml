@@ -86,13 +86,27 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-      - name: Install pytest
-        run: python -m pip install pytest
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+      # Same canonical inputs as the Ubuntu python job: the hash-verified
+      # universal lock plus the dev set. test_release_distribution imports
+      # cc_remote.protocol, which needs typing_extensions/pydantic from the
+      # runtime lock; installing pytest alone is not enough.
+      - name: Install Python dependencies
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip sync `
+            --python .venv\Scripts\python.exe `
+            --require-hashes --only-binary=:all: --no-binary=http-ece `
+            requirements.lock
+          uv pip install --python .venv\Scripts\python.exe -r requirements-dev.txt
       - name: Run packaging, lifecycle, and release-contract tests
         env:
           PYTHONUTF8: "1"
         run: |
-          python -m pytest `
+          .venv\Scripts\python.exe -m pytest `
             tests/test_windows_packaging.py `
             tests/test_windows_import_compat.py `
             tests/test_release_metadata.py `
