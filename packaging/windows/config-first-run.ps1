@@ -46,6 +46,11 @@
     prefill the wizard. Secrets are never read from it; they are always
     regenerated on first run.
 
+.PARAMETER StaticDir
+    Absolute path to the built web client (WEB_STATIC_DIR). Defaults to
+    <InstallRoot>\releases\current\web\dist (installed layout). The portable
+    launcher passes <portable-root>\payload\web\dist instead.
+
 .PARAMETER Unattended
     Do not prompt; fail instead when a required value is missing or invalid.
 
@@ -63,6 +68,7 @@ param(
     [int]$RelayPort = 8765,
     [switch]$AllowInsecureHttp,
     [string]$ConfigFile = "",
+    [string]$StaticDir = "",
     [switch]$Unattended
 )
 
@@ -212,6 +218,8 @@ if ($seed["RELAY_PORT"]) {
 $claudeBin = if ($seed["CLAUDE_BIN"]) { $seed["CLAUDE_BIN"] } else { (Get-Command claude -ErrorAction SilentlyContinue).Source }
 $codexBin = if ($seed["CC_REMOTE_CODEX_BIN"]) { $seed["CC_REMOTE_CODEX_BIN"] } else { (Get-Command codex -ErrorAction SilentlyContinue).Source }
 
+if (-not $StaticDir) { $StaticDir = Join-Path $InstallRoot "releases\current\web\dist" }
+
 $commonArgs = @(
     $winConfig,
     "render-env",
@@ -222,7 +230,7 @@ $commonArgs = @(
     "--relay-port", "$RelayPort",
     "--state-dir", (Join-Path $InstallRoot "state"),
     "--work-root", (Join-Path $InstallRoot "state\work"),
-    "--static-dir", (Join-Path $InstallRoot "releases\current\web\dist")
+    "--static-dir", $StaticDir
 )
 if ($AllowInsecureHttp) { $commonArgs += "--insecure" }
 if ($claudeBin) { $commonArgs += "--claude-bin"; $commonArgs += $claudeBin }

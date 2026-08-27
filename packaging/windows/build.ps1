@@ -75,6 +75,7 @@ Write-Step "Validating canonical release metadata"
 if ($LASTEXITCODE -ne 0) { throw "release metadata validation failed" }
 $metadata = Get-Content (Join-Path $sourceRoot "deploy\release-metadata.json") -Raw | ConvertFrom-Json
 $distributionVersion = $metadata.distribution_version
+$productVersion = $metadata.product_version
 
 # --- Verify the bundled uv version matches the pin ---------------------------
 $uvVersionText = (Get-Content (Join-Path $sourceRoot "deploy\uv-version.txt") | Select-Object -First 1).Trim()
@@ -109,26 +110,70 @@ Write-Step "Running the clean-install smoke suite"
 & $python (Join-Path $PSScriptRoot "win_smoke.py") --check $payload
 if ($LASTEXITCODE -ne 0) { throw "smoke suite failed" }
 
-# --- Assemble the deterministic archive --------------------------------------
-$archiveName = "cc-remote-v$distributionVersion-windows-x64.zip"
-$archivePath = Join-Path $outputDir $archiveName
-Write-Step "Assembling $archiveName (SOURCE_DATE_EPOCH=$SourceDateEpoch)"
-& $python (Join-Path $PSScriptRoot "win_build.py") `
-    --setup (Join-Path $PSScriptRoot "setup.ps1") `
-    --packaging (Join-Path $PSScriptRoot ".") `
-    --packaging-init (Join-Path (Split-Path $PSScriptRoot -Parent) "__init__.py") `
-    --payload $payload `
-    --output $archivePath `
-    --source-date-epoch $SourceDateEpoch `
-    --git-sha $GitSha
-if ($LASTEXITCODE -ne 0) { throw "archive assembly failed" }
+# --- Populate the stage root with the archive layout -------------------------
+# The stage root is exactly the archive layout: setup.ps1, packaging/windows,
+# and the verified payload. win_build.py embeds it into both zips and
+# build-installer.ps1 feeds it to Inno Setup, so the .exe bundles the identical
+# tree the zips carry.
+Write-Step "Populating the stage root with the archive layout"
+Copy-Item -Force (Join-Path $PSScriptRoot "setup.ps1") (Join-Path $stageRoot "setup.ps1")
+$stagePackaging = Join-Path $stageRoot "packaging"
+New-Item -ItemType Directory -Force -Path (Join-Path $stagePackaging "windows") | Out-Null
+Copy-Item -Force (Join-Path (Split-Path $PSScriptRoot -Parent) "__init__.py") (Join-Path $stagePackaging "__init__.py")
+Copy-Item -Path (Join-Path $PSScriptRoot "*") -Destination (Join-Path $stagePackaging "windows") -Recurse -Force
 
-$sha = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()
-$size = (Get-Item $archivePath).Length
-Write-Step "Built $archiveName ($size bytes)"
+# --- Assemble the two deterministic archives ----------------------------------
+function Invoke-ArchiveAssembly {
+    param([string]$Name, [string[]]$ExtraArgs)
+    $archivePath = Join-Path $outputDir $Name
+    Write-Step "Assembling $Name (SOURCE_DATE_EPOCH=$SourceDateEpoch)"
+    & $python (Join-Path $PSScriptRoot "win_build.py") `
+        --packaging (Join-Path $stagePackaging "windows") `
+        --packaging-init (Join-Path $stagePackaging "__init__.py") `
+        --payload $payload `
+        --output $archivePath `
+        --source-date-epoch $SourceDateEpoch `
+        --git-sha $GitSha `
+        @ExtraArgs
+    if ($LASTEXITCODE -ne 0) { throw "archive assembly failed: $Name" }
+    return $archivePath
+}
+
+$installerArchiveName = "cc-remote-v$distributionVersion-windows-x64.zip"
+$installerArchivePath = Invoke-ArchiveAssembly -Name $installerArchiveName `
+    -ExtraArgs @("--setup", (Join-Path $stageRoot "setup.ps1"))
+
+$portableArchiveName = "cc-remote-v$distributionVersion-windows-x64-portable.zip"
+$portableArchivePath = Invoke-ArchiveAssembly -Name $portableArchiveName `
+    -ExtraArgs @(
+        "--portable",
+        "--start-portable", (Join-Path $stagePackaging "windows\start-portable.ps1"),
+        "--readme", (Join-Path $stagePackaging "windows\README-portable.txt")
+    )
+
+foreach ($path in @($installerArchivePath, $portableArchivePath)) {
+    $sha = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+    $size = (Get-Item $path).Length
+    Write-Step "Built $($path.Name) ($size bytes)"
+    Write-Step "SHA256 $sha"
+    Set-Content -Path "$path.sha256" -Value "$sha  $($path.Name)" -Encoding ascii
+}
+
+# --- Compile the real installer (.exe) with Inno Setup ------------------------
+Write-Step "Compiling the installer executable"
+& (Join-Path $PSScriptRoot "build-installer.ps1") `
+    -SourceRoot $sourceRoot `
+    -StageDir $stageRoot `
+    -DistributionVersion $distributionVersion `
+    -ProductVersion $productVersion `
+    -OutputDir $outputDir
+if ($LASTEXITCODE -ne 0) { throw "installer compilation failed" }
+$setupExe = Join-Path $outputDir "cc-remote-v$distributionVersion-windows-x64-setup.exe"
+$sha = (Get-FileHash -Algorithm SHA256 -Path $setupExe).Hash.ToLowerInvariant()
+$size = (Get-Item $setupExe).Length
+Write-Step "Built $($setupExe | Split-Path -Leaf) ($size bytes)"
 Write-Step "SHA256 $sha"
-Write-Step "Recording SHA256SUMS"
-Set-Content -Path (Join-Path $outputDir "$archiveName.sha256") -Value "$sha  $archiveName" -Encoding ascii
+Set-Content -Path "$setupExe.sha256" -Value "$sha  $($setupExe | Split-Path -Leaf)" -Encoding ascii
 
-Write-Step "Done: $archivePath"
+Write-Step "Done: $installerArchivePath, $portableArchivePath, $setupExe"
 exit 0

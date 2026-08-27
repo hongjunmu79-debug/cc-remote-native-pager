@@ -72,12 +72,75 @@ if ($AsService) {
 
 Write-Host "[cc-remote] portable mode (Ctrl+C to stop). Use -AsService for supervised startup." -ForegroundColor Yellow
 
-if ($Service -in @("relay", "both")) {
-    Write-Host "[cc-remote] starting relay ..."
-    & $venvPython -m cc_remote.relay
+# In portable mode each requested process runs as a tracked foreground child.
+# `both` launches relay and wrapper CONCURRENTLY — the relay must not block
+# wrapper startup — then waits for the first child to exit and stops the
+# remaining one, so a crash or Ctrl+C never leaves an orphan.
+$children = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+$script:cancelRequested = $false
+
+$cancelHandler = [System.ConsoleCancelEventHandler]{
+    param($sender, $e)
+    $script:cancelRequested = $true
+    $e.Cancel = $true
+}
+[System.Console]::Add_CancelKeyPress($cancelHandler)
+
+function Start-RemoteChild {
+    param([string]$Module)
+    # A raw .NET Process, not Start-Process: Start-Process -PassThru returns an
+    # EMPTY ExitCode in Windows PowerShell 5.1 once the child has exited, which
+    # would swallow a crash/failure exit code. UseShellExecute=$false keeps the
+    # child in this console (the -NoNewWindow behaviour) and lets .NET reap the
+    # real exit status.
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $venvPython
+    $startInfo.Arguments = "-m " + $Module
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $false
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw "failed to start $Module" }
+    $script:children.Add($process)
+    Write-Host "[cc-remote] started $Module (pid $($process.Id))"
 }
 
-if ($Service -in @("wrapper", "both")) {
-    Write-Host "[cc-remote] starting wrapper ..."
-    & $venvPython -m cc_remote.wrapper
+function Wait-FirstChildExit {
+    while (-not $script:cancelRequested) {
+        foreach ($process in $script:children) {
+            $process.Refresh()
+            if ($process.HasExited) {
+                # Refresh() can flip HasExited a beat before the OS exit code is
+                # available; WaitForExit() blocks only until the exited handle is
+                # fully reaped and guarantees ExitCode is populated.
+                $process.WaitForExit()
+                return $process.ExitCode
+            }
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    return 0
 }
+
+$exitCode = 0
+try {
+    if ($Service -in @("relay", "both")) { Start-RemoteChild "cc_remote.relay" }
+    if ($Service -in @("wrapper", "both")) { Start-RemoteChild "cc_remote.wrapper" }
+
+    $exitCode = Wait-FirstChildExit
+    if ($script:cancelRequested) {
+        Write-Host "[cc-remote] stop requested; stopping children ..." -ForegroundColor Yellow
+    } else {
+        Write-Host "[cc-remote] a child exited; stopping the remaining children ..." -ForegroundColor Yellow
+    }
+} finally {
+    foreach ($process in $children) {
+        $process.Refresh()
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    [System.Console]::Remove_CancelKeyPress($cancelHandler)
+}
+
+exit $exitCode

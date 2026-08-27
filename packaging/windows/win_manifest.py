@@ -69,7 +69,16 @@ def iter_distribution_files(root: Path):
 def build_manifest(root: Path, info: DistributionInfo) -> dict:
     """Build the distribution manifest dict (does not write it)."""
     files: dict[str, str] = {}
+    # SHA256SUMS and the manifest itself are derived artifacts. Hashing them
+    # back into the manifest would be circular and make a second manifest build
+    # over the same tree (win_build.py rebuilds per archive, and build.ps1
+    # assembles two archives from one payload) record stale self-checksums.
+    # They are excluded here and still written + presence-checked separately,
+    # so rebuilding over an already-built distribution is idempotent.
+    derived = {_SHA256SUMS_NAME, DISTRIBUTION_MANIFEST_NAME}
     for path in iter_distribution_files(root):
+        if path.name in derived:
+            continue
         rel = path.relative_to(root).as_posix()
         files[rel] = sha256_of(path)
     return {

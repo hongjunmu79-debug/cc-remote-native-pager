@@ -11,8 +11,8 @@
          deploy\python-version.txt and requirements.lock (no shipped .venv).
       3. Copies the payload into releases\<distribution-version> (immutable),
          switches the current junction, and wires a venv site-packages .pth so
-         the app imports cc_remote from releases\current\payload. The previous
-         release is kept for rollback and recorded in releases\current.json.
+         the app imports cc_remote from releases\current. The previous release
+         is kept for rollback and recorded in releases\current.json.
       4. Config: on a fresh install runs config-first-run.ps1 (strong secrets,
          no placeholders). On an upgrade it validates the existing config with
          validate_preserved_config and keeps it byte-for-byte.
@@ -180,13 +180,14 @@ New-Item -ItemType Junction -Path (Join-Path $releasesDir "current") -Target $re
 
 # Make the cc_remote package importable by the runtime venv from the current
 # release. A site-packages .pth file (not PYTHONPATH) keeps the app's sys.path
-# minimal and versioned: relay/wrapper load cc_remote from
-# releases\current\payload, which the junction retargets on upgrade and
-# rollback. The payload dir contains no ``packaging`` package, so the venv's
-# installed ``packaging`` distribution is never shadowed by the release tree.
+# minimal and versioned. The release root IS the payload content (win_manifest
+# --copy copies payload/* -> releases\<version>/*), so the .pth adds
+# releases\current; the junction retargets it on upgrade and rollback. The
+# release tree contains no ``packaging`` package, so the venv's installed
+# ``packaging`` distribution is never shadowed by the app's sys.path.
 $sitePackages = Join-Path $venvDir "Lib\site-packages"
 New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
-Set-Content -Path (Join-Path $sitePackages "cc_remote_release.pth") -Value (Join-Path $releasesDir "current\payload") -Encoding ascii
+Set-Content -Path (Join-Path $sitePackages "cc_remote_release.pth") -Value (Join-Path $releasesDir "current") -Encoding ascii
 
 # --- 4. Config: preserve on upgrade, first-run wizard on fresh install ------
 if (Test-Path $envPath) {
@@ -230,24 +231,14 @@ foreach ($line in (Get-Content $envPath -ErrorAction SilentlyContinue)) {
 }
 
 # --- 5. Scheduled tasks (unless -NoServices) --------------------------------
+# Registration is delegated to register-tasks.ps1 (also used by
+# uninstall.ps1 -Rollback) so the two paths can never drift.
 if (-not $NoServices) {
     if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) {
         throw "Task Scheduler module is not available on this machine; re-run with -NoServices"
     }
     Write-Step "Registering supervised scheduled tasks"
-    $supervise = Join-Path $PSScriptRoot "supervise.ps1"
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
-    foreach ($service in @("relay", "wrapper")) {
-        $taskName = "cc-remote-$service"
-        $argument = "-NoProfile -ExecutionPolicy Bypass -File `"$supervise`" -Service $service -InstallRoot `"$installRootFull`""
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-        Write-Step "  registered $taskName (supervises python -m cc_remote.$service)"
-    }
-    # Start them now so the install is immediately usable.
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "start.ps1") -InstallRoot $installRootFull -AsService
+    & (Join-Path $PSScriptRoot "register-tasks.ps1") -InstallRoot $installRootFull
     if ($LASTEXITCODE -ne 0) { Write-Host "[cc-remote] warning: scheduled tasks registered but could not start" -ForegroundColor Yellow }
 } else {
     Write-Step "Skipping scheduled tasks (-NoServices); run start.ps1 -AsService later if needed"

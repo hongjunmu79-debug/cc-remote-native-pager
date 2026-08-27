@@ -420,6 +420,27 @@ def test_verify_distribution_detects_corruption(tmp_path: Path):
     assert any("manifest file missing" in problem for problem in problems)
 
 
+def test_rebuilding_manifest_over_built_distribution_is_idempotent(tmp_path: Path):
+    # win_build.py regenerates the manifest per archive, and build.ps1 assembles
+    # two archives (installer + portable) from ONE staged payload. Rebuilding
+    # must not record stale self-checksums for SHA256SUMS / the manifest itself,
+    # or the shipped artifact would fail the installer's payload gate.
+    make_distribution(tmp_path)
+    first = win_manifest.read_manifest(tmp_path)
+    assert "SHA256SUMS" not in first["files"]
+    assert "distribution-manifest.json" not in first["files"]
+
+    info = win_manifest._info_from_metadata(tmp_path, "a" * 40, 0)
+    for _ in range(3):  # more rebuilds than build.ps1 does; must stay clean
+        win_manifest.write_manifest(tmp_path, win_manifest.build_manifest(tmp_path, info))
+    assert win_manifest.verify_distribution(tmp_path) == []
+    rebuilt = win_manifest.read_manifest(tmp_path)
+    assert rebuilt["files"] == first["files"]
+    assert "SHA256SUMS" not in rebuilt["files"]
+    assert "distribution-manifest.json" not in rebuilt["files"]
+    assert (tmp_path / "SHA256SUMS").is_file()
+
+
 def test_verify_distribution_rejects_venv_and_symlinks(tmp_path: Path):
     make_distribution(tmp_path)
     (tmp_path / "runtime").mkdir()
@@ -644,13 +665,17 @@ def _repo_packaging_script(name: str) -> str:
 def test_installer_wires_cc_remote_import_path_for_the_venv():
     # The runtime venv installs only third-party deps (requirements.lock), so
     # nothing makes `python -m cc_remote.relay` find the app package unless the
-    # installer puts releases\current\payload on the venv's sys.path. The
-    # .pth mechanism keeps packaging/ out of the app process (no shadowing of
-    # the venv's installed `packaging` distribution).
+    # installer puts the current release on the venv's sys.path. The release
+    # root IS the payload content (win_manifest --copy copies payload/* into
+    # releases\<version>/*), so the .pth must point at the junction itself,
+    # which retargets on upgrade and rollback. The .pth mechanism keeps
+    # packaging/ out of the app process (no shadowing of the venv's installed
+    # `packaging` distribution).
     script = _repo_packaging_script("install.ps1")
     assert "cc_remote_release.pth" in script
-    assert "current\\payload" in script or "current/payload" in script
     assert "Lib\\site-packages" in script
+    assert 'Join-Path $releasesDir "current"' in script
+    assert "current\\payload" not in script and "current/payload" not in script
 
 
 def test_supervisor_and_start_invoke_python_m_modules():
@@ -667,9 +692,9 @@ def test_supervisor_and_start_invoke_python_m_modules():
 
 def test_payload_never_contains_the_packaging_package():
     # If a staged payload ever carried a top-level `packaging/` dir, the app's
-    # sys.path (which includes releases\current\payload via the .pth) could
-    # shadow the venv's installed `packaging` distribution and break deps that
-    # import packaging.version (e.g. pydantic). stage_payload must keep it out.
+    # sys.path (which includes the current release via the .pth) could shadow
+    # the venv's installed `packaging` distribution and break deps that import
+    # packaging.version (e.g. pydantic). stage_payload must keep it out.
     import shutil
     import tempfile
 
@@ -686,3 +711,369 @@ def test_payload_never_contains_the_packaging_package():
     finally:
         shutil.rmtree(source, ignore_errors=True)
         shutil.rmtree(dest, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Portable archive (the second Windows deliverable)
+# ---------------------------------------------------------------------------
+
+
+def _stage_and_build_portable_archive(
+    tmp_path: Path,
+    epoch: int,
+    name: str = "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip",
+) -> tuple[Path, win_build.ReleaseArchive]:
+    stem = Path(name).stem
+    source = tmp_path / f"source-{stem}"
+    make_source_tree(source)
+    payload = tmp_path / f"payload-{stem}"
+    win_manifest.stage_payload(source, payload)
+    build_fake_distribution(payload)
+    packaging = tmp_path / "packaging"
+    (packaging / "windows").mkdir(parents=True, exist_ok=True)
+    (packaging / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
+    (packaging / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
+    (packaging / "windows" / "win_config.py").write_text("import json\n", encoding="utf-8")
+    start_portable = tmp_path / "start-portable.ps1"
+    start_portable.write_text("# start-portable\n", encoding="utf-8")
+    readme = tmp_path / "README-portable.txt"
+    readme.write_text("# portable\n", encoding="utf-8")
+    output = tmp_path / "out" / name
+    archive = win_build.build_portable_archive(
+        start_portable=start_portable,
+        readme=readme,
+        packaging_dir=packaging / "windows",
+        payload=payload,
+        output_path=output,
+        packaging_init=packaging / "__init__.py",
+        source_date_epoch=epoch,
+    )
+    return source, archive
+
+
+def test_build_portable_archive_contents(tmp_path: Path):
+    import zipfile
+
+    _, archive = _stage_and_build_portable_archive(tmp_path, 0)
+    with zipfile.ZipFile(archive.path) as handle:
+        names = set(handle.namelist())
+        assert "start-portable.ps1" in names
+        assert "README-portable.txt" in names
+        assert "packaging/__init__.py" in names
+        assert "packaging/windows/install.ps1" in names
+        assert "payload/distribution-manifest.json" in names
+        assert "payload/cc_remote/__init__.py" in names
+        assert "payload/web/dist/index.html" in names
+        # A portable archive is run from the extracted root, never installed:
+        # it must not carry the installer entry point.
+        assert "setup.ps1" not in names
+
+
+def test_portable_archive_is_deterministic_and_named_from_metadata(tmp_path: Path):
+    # Determinism: two builds from the same epoch are byte-identical.
+    _, first = _stage_and_build_portable_archive(tmp_path, 0, name="a.zip")
+    _, second = _stage_and_build_portable_archive(tmp_path, 0, name="b.zip")
+    assert first.path.read_bytes() == second.path.read_bytes()
+    # The archive carries the canonical version values from release-metadata.json.
+    assert first.distribution_version == "3.0.0-pager.5"
+    assert first.product_version == "3.0.0"
+    # build.ps1 derives the artifact name from distribution_version.
+    default = _stage_and_build_portable_archive(tmp_path, 0)
+    assert default[1].path.name == "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip"
+
+
+def test_portable_archive_requires_start_portable(tmp_path: Path):
+    source = tmp_path / "source"
+    make_source_tree(source)
+    payload = tmp_path / "payload"
+    win_manifest.stage_payload(source, payload)
+    build_fake_distribution(payload)
+    packaging = tmp_path / "packaging"
+    (packaging / "windows").mkdir(parents=True, exist_ok=True)
+    with pytest.raises(win_build.BuildError):
+        win_build.build_portable_archive(
+            start_portable=tmp_path / "missing.ps1",
+            readme=None,
+            packaging_dir=packaging / "windows",
+            payload=payload,
+            output_path=tmp_path / "out.zip",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Installed runtime wiring (static guards on the shipped PowerShell)
+# ---------------------------------------------------------------------------
+
+
+def _repo_file(relpath: str) -> str:
+    return (Path(__file__).resolve().parents[1] / relpath).read_text(encoding="utf-8")
+
+
+def test_start_portable_bootstraps_venv_and_delegates():
+    # start-portable.ps1 is the portable root entry: it must create a private
+    # venv from the bundled uv + pinned lock, wire the payload into the venv
+    # import path, run the config wizard with a portable static dir, then
+    # delegate to the shared start.ps1.
+    script = _repo_packaging_script("start-portable.ps1")
+    assert "bin\\uv.exe" in script
+    assert "python-version.txt" in script
+    assert "requirements.lock" in script
+    assert "cc_remote_portable.pth" in script
+    assert "config-first-run.ps1" in script
+    assert "-StaticDir" in script
+    assert 'payload "web\\dist"' in script or 'payload\\web\\dist' in script
+    assert "runtime\\.venv" in script
+    assert "Scripts\\python.exe" in script
+    assert "start.ps1" in script
+
+
+def test_config_first_run_accepts_static_dir():
+    script = _repo_packaging_script("config-first-run.ps1")
+    assert "[string]$StaticDir" in script
+    assert '"--static-dir", $StaticDir' in script
+
+
+def test_inno_installer_is_a_real_installer_and_build_fails_closed():
+    # The .iss must produce a genuine installer: it extracts setup.ps1 + the
+    # packaging scripts + the verified payload and RUNS setup.ps1, so the exe
+    # can never drift from install.ps1. The compiler wrapper fails (never
+    # fakes) when ISCC.exe is absent.
+    iss = _repo_file("packaging/windows/inno/cc-remote.iss")
+    assert "[Setup]" in iss
+    assert "OutputBaseFilename={#OutputName}" in iss
+    assert "DistVersion" in iss
+    assert 'Source: "{#StageDir}\\setup.ps1"' in iss
+    assert 'Source: "{#StageDir}\\packaging\\*"' in iss
+    assert 'Source: "{#StageDir}\\payload\\*"' in iss
+    assert 'Filename: "powershell.exe"' in iss
+    assert "setup.ps1" in iss
+    assert "-InstallRoot" in iss
+    builder = _repo_packaging_script("build-installer.ps1")
+    assert "ISCC.exe" in builder
+    assert "Refusing to emit a fake installer" in builder
+    assert "-NoServices" in builder
+
+
+def test_start_ps1_runs_both_concurrently_and_cleans_up():
+    # Portable `-Service both` must launch relay and wrapper as concurrent
+    # tracked children (Start-Process, not the blocking `&`), wait for the
+    # first to exit, and stop the remaining one so no orphan survives.
+    script = _repo_packaging_script("start.ps1")
+    assert "Start-Process" in script
+    assert "-NoNewWindow" in script
+    assert "cc_remote.relay" in script
+    assert "cc_remote.wrapper" in script
+    assert "Wait-FirstChildExit" in script
+    assert "Stop-Process" in script
+    # The pre-fix blocking form must be gone.
+    assert "& $venvPython -m cc_remote.relay" not in script
+    assert "& $venvPython -m cc_remote.wrapper" not in script
+
+
+def test_install_uses_shared_register_tasks_helper():
+    script = _repo_packaging_script("install.ps1")
+    assert "register-tasks.ps1" in script
+    # A real install never unregisters tasks.
+    assert "Unregister-ScheduledTask" not in script
+
+
+def test_uninstall_rollback_is_transactional():
+    # -Rollback must re-sync the venv to the previous release BEFORE switching
+    # the junction, re-create the tasks via the shared helper, start them, and
+    # health-check. A real uninstall unregisters the tasks only AFTER the
+    # rollback branch, so a rollback never finds its tasks already gone. The
+    # failure-safe restore helper re-switches the junction back.
+    script = _repo_packaging_script("uninstall.ps1")
+    lines = script.splitlines()
+
+    def find(sub: str) -> int:
+        for index, line in enumerate(lines):
+            if sub in line:
+                return index
+        raise AssertionError(f"missing {sub!r} in uninstall.ps1")
+
+    assert find("pip install") < find("-Target $prevDir")
+    assert find("register-tasks.ps1") < find("Test-SupervisedHealth")
+    assert find("if ($Rollback)") < find("Unregister-ScheduledTask")
+    assert "Restore-ActiveRelease" in script
+    assert "Test-SupervisedHealth" in script
+
+
+def test_build_ps1_produces_three_artifacts():
+    # One verified payload yields the installer zip, the portable zip, and the
+    # compiled installer exe — all named from the canonical distribution
+    # version from deploy/release-metadata.json.
+    script = _repo_packaging_script("build.ps1")
+    assert "windows-x64.zip" in script
+    assert "windows-x64-portable.zip" in script
+    assert "windows-x64-setup.exe" in script
+    assert "--portable" in script
+    assert "--start-portable" in script
+    assert "build-installer.ps1" in script
+
+
+# ---------------------------------------------------------------------------
+# Real dual-process contract test (Windows only; isolated temp install)
+# ---------------------------------------------------------------------------
+
+_REAL_START_REASON = (
+    "start.ps1 -Service both is a Windows PowerShell behavior; "
+    "exercised against a temp install root on the Windows CI runner"
+)
+
+
+def _write_stub_module(site_packages: Path, module: str, body: str) -> None:
+    package = site_packages / "cc_remote"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / f"{module}.py").write_text(body, encoding="utf-8")
+
+
+def _count_venv_python_processes(venv_python: Path) -> int:
+    proc = subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "@(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{venv_python}*' }}).Count",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    try:
+        return int(proc.stdout.strip())
+    except ValueError:
+        return -1
+
+
+def _terminate_venv_python_processes(venv_python: Path) -> None:
+    subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{venv_python}*' }} | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@pytest.mark.skipif(not sys.platform.startswith("win"), reason=_REAL_START_REASON)
+def test_start_ps1_service_both_launches_concurrently_and_cleans_up(tmp_path: Path):
+    # Real dual-process contract: start.ps1 -Service both must launch relay AND
+    # wrapper at the same time (relay must not block wrapper startup), keep both
+    # alive while they run, and exit 0 after they finish with no orphan python.
+    import time
+
+    install_root = tmp_path / "install"
+    venv_dir = install_root / "runtime" / ".venv"
+    venv_python = venv_dir / "Scripts" / "python.exe"
+    config_dir = install_root / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("RELAY_PORT=8765\n", encoding="utf-8")
+
+    created = subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert created.returncode == 0, created.stderr
+    assert venv_python.is_file()
+
+    site_packages = venv_dir / "Lib" / "site-packages"
+    relay_marker = tmp_path / "relay.started"
+    wrapper_marker = tmp_path / "wrapper.started"
+    _write_stub_module(
+        site_packages,
+        "relay",
+        f"import time\nopen({str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(10)\n",
+    )
+    _write_stub_module(
+        site_packages,
+        "wrapper",
+        f"import time\nopen({str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(10)\n",
+    )
+
+    start_ps1 = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "start.ps1"
+    cmd = [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", str(start_ps1), "-Service", "both", "-InstallRoot", str(install_root),
+    ]
+    # Run from a directory that carries no cc_remote package, so the fake
+    # venv's stub modules are authoritative (the repo root would shadow them).
+    proc = subprocess.Popen(cmd, cwd=str(install_root), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.time() + 25
+        both_seen_while_alive = False
+        while time.time() < deadline:
+            if relay_marker.exists() and wrapper_marker.exists():
+                if proc.poll() is None:
+                    both_seen_while_alive = True
+                    break
+            time.sleep(0.2)
+        stdout, stderr = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    assert both_seen_while_alive, (
+        "relay and wrapper were not both running at the same time; "
+        f"stdout={stdout!r} stderr={stderr!r}"
+    )
+    assert proc.returncode == 0, f"stdout={stdout!r} stderr={stderr!r}"
+    assert _count_venv_python_processes(venv_python) == 0, "orphan python process left behind"
+    _terminate_venv_python_processes(venv_python)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("win"), reason=_REAL_START_REASON)
+def test_start_ps1_service_both_propagates_failure_and_stops_the_other(tmp_path: Path):
+    # Failure variant: when the relay exits non-zero, start.ps1 must propagate
+    # that exit code AND stop the still-running wrapper (no orphan).
+    import time
+
+    install_root = tmp_path / "install-fail"
+    venv_dir = install_root / "runtime" / ".venv"
+    venv_python = venv_dir / "Scripts" / "python.exe"
+    config_dir = install_root / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("RELAY_PORT=8765\n", encoding="utf-8")
+
+    created = subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert created.returncode == 0, created.stderr
+
+    site_packages = venv_dir / "Lib" / "site-packages"
+    relay_marker = tmp_path / "relay-fail.started"
+    wrapper_marker = tmp_path / "wrapper-fail.started"
+    _write_stub_module(
+        site_packages,
+        "relay",
+        f"import time, sys\nopen({str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(1)\nsys.exit(7)\n",
+    )
+    # The wrapper would run for 30s if it were not stopped by start.ps1.
+    _write_stub_module(
+        site_packages,
+        "wrapper",
+        f"import time\nopen({str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(30)\n",
+    )
+
+    start_ps1 = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "start.ps1"
+    cmd = [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", str(start_ps1), "-Service", "both", "-InstallRoot", str(install_root),
+    ]
+    # Run from a directory that carries no cc_remote package so the stubs win.
+    proc = subprocess.run(cmd, cwd=str(install_root), capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 7, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert wrapper_marker.exists(), "wrapper never launched before the relay failed"
+    # The wrapper's 30s sleep must have been interrupted; nothing may linger.
+    assert _count_venv_python_processes(venv_python) == 0, "orphan wrapper python left behind"
+    _terminate_venv_python_processes(venv_python)
