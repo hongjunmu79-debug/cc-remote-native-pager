@@ -71,10 +71,12 @@ received an array as `$path`:
   interpolation) and execute the foreach-under-StrictMode pattern on a real
   host.
 - The probe hashes with a pure .NET SHA-256 helper rather than `Get-FileHash`:
-  on the hosted windows-2025 runner the pytest-spawned PowerShell process
-  resolves `Microsoft.PowerShell.Utility` to an incomplete module copy that
-  lacks `Get-FileHash` even after an explicit import (see 7.4), so the BCL
-  types — which a `PSModulePath` shim cannot shadow — do the hashing. The
+  in the pytest-spawned Windows PowerShell process on the hosted windows-2025
+  runner, `Get-FileHash` was unavailable even after an explicit import (see
+  7.4). The BCL types — which a `PSModulePath` shim cannot shadow — do the
+  hashing; the local diagnosis (7.4) implicates the codex-runtimes
+  `PSModulePath` shim on this dev machine, but the exact hosted-subprocess
+  cause was not established from the available CI log. The
   `Microsoft.PowerShell.Utility` import is kept only so the remaining Utility
   cmdlet the probe uses (`Write-Output`) resolves when command autoloading is
   unreliable. Production `build.ps1` is unchanged.
@@ -93,14 +95,18 @@ Get-FileHash is not recognized ... at archive-sidecar-probe.ps1 line 52
 even though the probe ran `Import-Module Microsoft.PowerShell.Utility
 -ErrorAction Stop` first. The explicit import therefore does NOT make the
 cmdlet available in the pytest-spawned Windows PowerShell process on the
-hosted runner. This invalidated the round-7 assumption that stock
-`windows-2025` is immune to the module-shadowing/autoload problem that the
-codex-runtimes `PSModulePath` shim causes on this dev machine: in both
-environments `Microsoft.PowerShell.Utility` resolves to a copy that lacks
-`Get-FileHash`, so neither autoloading nor the explicit import provides it.
-On this machine the shadowing copy lives at
+hosted runner. That is the full extent of what the hosted log establishes: it
+does not show the hosted runner's `PSModulePath`, nor prove that
+`Microsoft.PowerShell.Utility` resolved to an incomplete shadow copy there, so
+the exact hosted-subprocess cause was not determined from the available log.
+The round-7 assumption that stock `windows-2025` is immune to the
+module-shadowing/autoload problem was therefore invalidated only in the
+observable sense that the cmdlet can be missing in the hosted subprocess too.
+The module-shadowing mechanism itself is established only locally (this dev
+machine): the codex-runtimes `PSModulePath` shim puts a copy at
 `~/.cache/codex-runtimes/.../native/powershell/Modules`, ahead of the system
-module path; the hosted runner shows the same observable behavior.
+module path, and that copy lacks `Get-FileHash`. The hosted failure is
+recorded as the same observable symptom, not the same mechanism.
 
 The probe now computes SHA-256 with BCL types
 (`[System.Security.Cryptography.SHA256]` + `[System.IO.File]`), and the test
@@ -122,6 +128,14 @@ Verification of the follow-up:
 # => 3 passed
 ```
 
+CI evidence (host-independent probe): CI run 33124568012, Windows job
+98699468748 ("Windows distribution + release-contract tests") — the step "Run
+packaging, lifecycle, and release-contract tests" concluded success with
+"103 passed in 24.33s"; that step's pytest command is the same shape as ci.yml
+(three packaging suites plus the 11 curated `test_release_distribution.py`
+node IDs), so the archive-loop probe tests ran and passed on the hosted
+windows-2025 runner.
+
 ### Verification (exact commands and results)
 
 ```
@@ -129,10 +143,11 @@ Verification of the follow-up:
   tests/test_windows_packaging.py `
   tests/test_windows_import_compat.py `
   tests/test_release_metadata.py `
-  <the 12 curated test_release_distribution.py node IDs> -q
+  <the 11 curated test_release_distribution.py node IDs> -q
 # => 103 passed locally (round 7) — CI run 33123432637 then rejected the probe,
-#    so the local pass was necessary but not sufficient; see 7.4 for the
-#    host-independent probe and its re-run result.
+#    so the local pass was necessary but not sufficient; the host-independent
+#    probe then passed CI run 33124568012 (Windows job 98699468748, "103 passed
+#    in 24.33s"); see 7.4.
 uvx --from ruff==0.15.13 ruff check cc_remote tests deploy   # All checks passed
 git diff --check                                              # clean
 ```
@@ -148,7 +163,8 @@ git diff --check                                              # clean
   preserves the two-zips-plus-exe artifact contract.
 - The round-7 probe itself was environment-dependent (`Get-FileHash`) and CI
   run 33123432637 proved that out; the follow-up (7.4) made it host-independent
-  without touching production `build.ps1`.
+  without touching production `build.ps1`, and the host-independent probe
+  passed the Windows job of CI run 33124568012 (job 98699468748).
 
 ## Round 6: bundle-root derivation, strict-mode string paths, endpoint canonicalization, stale docs
 
