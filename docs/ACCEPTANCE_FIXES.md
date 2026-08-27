@@ -1,0 +1,192 @@
+# ACCEPTANCE_FIXES.md — release-hardening round 2
+
+What was fixed in this round, the exact commands used to verify it, and the
+honest limitations of the local verification. Everything here is zero-token
+unless stated otherwise.
+
+Branch: `codex/release-hardening`. No main merge, no tag, no release was
+created by this work.
+
+## 1. Windows distribution: two genuinely distinct deliverables
+
+The Windows release now produces **three** artifacts, all named from the
+canonical `distribution_version` in `deploy/release-metadata.json`
+(`3.0.0-pager.5`):
+
+| artifact | purpose |
+|---|---|
+| `cc-remote-v3.0.0-pager.5-windows-x64.zip` | **installer archive**: `setup.ps1` at root, runs the transactional install |
+| `cc-remote-v3.0.0-pager.5-windows-x64-portable.zip` | **portable archive**: `start-portable.ps1` at root, self-contained venv, no tasks/firewall/registry |
+| `cc-remote-v3.0.0-pager.5-windows-x64-setup.exe` | **real installer executable** compiled by Inno Setup (ISCC) |
+
+A ZIP containing `setup.ps1` alone is not an installer; the `.exe` is compiled
+by `build-installer.ps1` from `inno/cc-remote.iss`, which runs `setup.ps1` with
+`-InstallRoot {app}` and `PrivilegesRequired=lowest`. `build-installer.ps1`
+fails closed (throws, never emits a fake installer) when ISCC is absent.
+
+Each artifact gets a sibling `.sha256` file.
+
+### Fixes found while validating the pipeline
+- **`build.ps1` referenced an undefined `$productVersion`** when calling
+  `build-installer.ps1` (would throw under `Set-StrictMode`). Fixed by reading
+  it from the metadata object.
+- **Manifest self-reference corruption**: `win_build.py main()` regenerates
+  the distribution manifest on every archive assembly, and `build_manifest`
+  hashed `SHA256SUMS` and `distribution-manifest.json` themselves. Assembling
+  two archives (installer + portable) from ONE staged payload therefore wrote
+  stale self-checksums into the manifest, and the *extracted* payload failed
+  `verify_distribution` — meaning `install.ps1`'s payload gate would refuse
+  the shipped artifact. Fixed in `win_manifest.py`: the two derived files are
+  excluded from the manifest's file map, so rebuilds are idempotent. New
+  regression test: `test_rebuilding_manifest_over_built_distribution_is_idempotent`.
+
+## 2. Windows lifecycle: rollback and dual-process start
+
+- **`uninstall.ps1 -Rollback`** is now a failure-safe transaction in the
+  required order: (1) pinned uv re-sync of the runtime venv to the previous
+  release's `requirements.lock`, (2) junction switch to the previous release,
+  (3) `register-tasks.ps1` re-creates and starts the supervised tasks,
+  (4) `Test-SupervisedHealth` health-check. On any failure the failed-active
+  release is restored (junction, venv, tasks) and the error rethrown.
+- **`start.ps1 -Service both`** launches relay and wrapper concurrently (relay
+  does not block wrapper startup), waits for the first child to exit, stops the
+  remaining one, propagates the exit code, and cleans up on Ctrl+C.
+- **`start.ps1` exit-code bug**: `Start-Process -PassThru` returns an EMPTY
+  `ExitCode` in Windows PowerShell 5.1 once the child has exited, so a failing
+  child (e.g. `sys.exit(7)`) was reported as success. `Start-RemoteChild` now
+  uses a raw .NET `Process`/`ProcessStartInfo` (`UseShellExecute=$false`,
+  `CreateNoWindow=$false`), which reaps the real exit status. Reproduced in
+  isolation first: `powershell -File` reported `ExitCode=[]` for `Start-Process`,
+  then `ExitCode=[7]` for the raw Process.
+- **`install.ps1`** wires the venv `.pth` to `releases\current` (the junction),
+  and task registration is delegated to the shared `register-tasks.ps1` so
+  install and rollback cannot drift.
+
+## 3. Release fail-closed: signing, signer fingerprint, tags, pins
+
+- Android tag-push builds are fail-closed: missing `PAGER_KEYSTORE_B64` /
+  `PAGER_SIGNING_PROPERTIES` on a tag push stops the build (an unsigned release
+  APK is never produced); manual `workflow_dispatch` validation runs may build
+  unsigned.
+- On tag pushes the assembled APK's signer certificate SHA-256 must equal
+  `deploy/release-metadata.json` → `android.signer_sha256` (via `apksigner
+  verify --print-certs`); otherwise the job fails and publish is impossible.
+- Only the canonical distribution tag (`v3.0.0-pager.5`, enforced by
+  `deploy/tag_contract.py`) is a release; the bare product tag is not a trigger
+  and is rejected. Publication is tag-push-only.
+- GitHub Actions are pinned by commit SHA with `# vN` annotations
+  (checkout `@d23441a4… # v6`, setup-python `@ece7cb06… # v6`, setup-node
+  `@24997072… # v6`, setup-uv `@08807647… # v8.1.0`, setup-java
+  `@b6effb05… # v5`, upload/download-artifact `@ea165f8d…`/`@d3f86a10… # v4`).
+
+## 4. Android WebView exact-origin allowlisting
+
+`SecureWebViewController.kt` allows only the exact origin the app is meant to
+reach (host, scheme, and port), via the new `OriginPolicy.kt` + `OriginPolicyTest.kt`.
+
+## 5. CI wiring
+
+- **`ci.yml` python-windows job** now runs the production-relevant set on a
+  Windows runner: the full `test_windows_packaging.py` (packaging, install,
+  rollback, dual-process smoke), `test_windows_import_compat.py`,
+  `test_release_metadata.py`, and the Windows-compatible release-workflow
+  contracts from `test_release_distribution.py` (fail-closed signing, signer
+  SHA-256, tag contract, immutable pins, web-before-python). POSIX-only tests
+  (chmod, symlinks, atomic-rename, shell installers) deliberately run on Ubuntu
+  only — none are marked skipped.
+- **`release.yml` build-windows** installs Inno Setup (ISCC) via chocolatey,
+  builds all three artifacts, then verifies both zips extract to the correct
+  layout and pass the clean-install smoke (`win_smoke.py --check`) on the
+  extracted payload, plus the exe + checksum presence.
+- **`release.yml` publish** now checksums and asserts 2 zips, 1 exe, and their
+  `.sha256` files alongside the 6 role bundles.
+
+## Local verification (exact commands and results)
+
+All commands run on this Windows 11 machine from the repo root, Python from the
+repo venv:
+
+```
+# Full Windows packaging + lifecycle + release-contract suite (98 tests)
+.venv\Scripts\python.exe -m pytest `
+  tests/test_windows_packaging.py tests/test_windows_import_compat.py tests/test_release_metadata.py `
+  tests/test_release_distribution.py::test_release_workflow_materializes_web_before_python_bundle_tests `
+  tests/test_release_distribution.py::test_ci_python_job_materializes_web_before_python_tests `
+  tests/test_release_distribution.py::test_workflow_if_conditions_never_reference_secrets `
+  tests/test_release_distribution.py::test_role_installers_avoid_ambiguous_and_or_guards `
+  tests/test_release_distribution.py::test_role_locks_and_release_workflow_are_versioned_inputs `
+  tests/test_release_distribution.py::test_release_locks_keep_intel_macos_cryptography_wheel `
+  tests/test_release_distribution.py::test_release_metadata_android_signer_sha256_is_validated `
+  tests/test_release_distribution.py::test_release_tag_contract_accepts_only_canonical_distribution_tag `
+  tests/test_release_distribution.py::test_release_workflow_android_signing_is_fail_closed `
+  tests/test_release_distribution.py::test_release_workflow_publish_is_tag_push_only -q
+# => 98 passed
+
+# Web client
+npm --prefix web ci                       # ok
+npm --prefix web run build                # ok (web@3.0.0)
+npm --prefix web run lint                 # ok
+npm --prefix web run test:reliability     # ok (native pager bridge tests passed, etc.)
+
+# Android (JDK 17)
+cd android-native
+gradlew.bat testDebugUnitTest             # BUILD SUCCESSFUL in 23s
+gradlew.bat lintDebug                     # BUILD SUCCESSFUL in 2m 27s
+gradlew.bat assembleRelease               # (unsigned validation build; see limitation below)
+```
+
+### Windows packaging pipeline (with pinned uv 0.11.16)
+
+`build.ps1` was exercised with the pinned `uv.exe` (downloaded from the uv
+release for the version `deploy/uv-version.txt` pins):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\build.ps1 `
+  -SourceRoot . -OutputDir <tmp> -UvExe <pinned uv.exe> `
+  -GitSha 28b2c8a59b3e115b407994fede4e17e363a84da1 -SourceDateEpoch 0
+```
+
+Result: metadata validation passed, payload staged, uv bundled, and the
+clean-install smoke ran. The smoke **failed on the dev machine by design** —
+`FORBIDDEN_DEV_PATH_MARKERS` in `win_smoke.py` hardcodes this developer's
+username (`23715`), and the smoke renders a first-run config whose workspace
+lives under the dev's home temp dir, so a local build on this exact machine
+always trips the gate. The same payload passes when the smoke's temp root is
+neutral (not under `C:\Users\23715`), and CI's runner user is not `23715`, so
+the gate is exactly the "never ship a config with the builder's path" guard it
+is meant to be. The ISCC step then fails closed locally because Inno Setup is
+not installed on this machine.
+
+Both archives were assembled from one staged payload (the two-invocation flow
+`build.ps1` uses), extracted, and their payloads smoke-verified:
+
+```
+cc-remote-v3.0.0-pager.5-windows-x64.zip:           PASS (setup.ps1 at root)
+cc-remote-v3.0.0-pager.5-windows-x64-portable.zip:  PASS (start-portable.ps1 at root)
+```
+
+## Honest limitations
+
+- **The installer `.exe` was NOT compiled locally.** ISCC (Inno Setup) is not
+  installed on this machine, and `build-installer.ps1` fails closed by design
+  rather than emit a fake installer. The `.iss` and wrapper are validated by
+  unit tests (`test_inno_installer_is_a_real_installer_and_build_fails_closed`,
+  `test_build_ps1_produces_three_artifacts`) and the real exe is compiled on
+  CI's windows-2025 runner (chocolatey `innosetup`). The exe's presence,
+  non-trivial size, and `MZ` PE header are verified by `build-installer.ps1`
+  immediately after compilation.
+- **`build.ps1` did not run to completion locally** for the two reasons above
+  (dev-machine smoke gate + no ISCC); its constituent steps (stage → manifest →
+  smoke → both zips) were validated individually with the pinned uv, and the
+  zips were smoke-verified after extraction. The full three-artifact run
+  happens in CI.
+- **Android `assembleRelease`** runs locally only as an unsigned validation
+  build (no signing secrets on this machine — they must never leave the CI
+  secret store). The exact `apksigner` SHA-256 gate is executed by the CI
+  release job on tag pushes only.
+- **CI workflows were not executed** from this branch in this session (no push
+  was made while the branch was uncommitted, and the environment may be
+  network-limited). The YAML is exercised by the release-contract unit tests
+  (`test_release_workflow_*`, `test_ci_python_job_*`) that parse it.
+- No push of the branch was confirmed at the time of writing; see the session
+  report for the actual push result / any network limitation.
