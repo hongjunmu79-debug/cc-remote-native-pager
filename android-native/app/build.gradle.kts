@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.File
+import groovy.json.JsonSlurper
 
 plugins {
     alias(libs.plugins.android.application)
@@ -13,6 +14,17 @@ kotlin {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
+
+// Canonical release metadata (deploy/release-metadata.json) is the single
+// source of truth for the package id, version name, and version code. CI
+// overrides them through PAGER_* variables only when signing a real release.
+val releaseMetadata = JsonSlurper().parse(
+    rootProject.file("../deploy/release-metadata.json"),
+) as Map<*, *>
+val androidMetadata = releaseMetadata["android"] as Map<*, *>
+val metadataApplicationId = androidMetadata["application_id"] as String
+val metadataVersionName = androidMetadata["version_name"] as String
+val metadataVersionCode = (androidMetadata["version_code"] as Number).toInt()
 
 val signingPropertiesPath = providers.environmentVariable("PAGER_SIGNING_PROPERTIES").orNull
 val signingPropertiesFile = signingPropertiesPath?.let(rootProject::file)
@@ -29,18 +41,21 @@ android {
 
     defaultConfig {
         applicationId = providers.environmentVariable("PAGER_APPLICATION_ID")
-            .orNull ?: "dev.ccremote.lan"
+            .orNull ?: metadataApplicationId
         minSdk = 26
         targetSdk = 36
         versionCode = providers.environmentVariable("PAGER_VERSION_CODE")
-            .orNull?.toIntOrNull() ?: 30_010
+            .orNull?.toIntOrNull() ?: metadataVersionCode
         versionName = providers.environmentVariable("PAGER_VERSION_NAME")
-            .orNull ?: "3.0.0-pager.1"
+            .orNull ?: metadataVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField(
             "String",
             "DEFAULT_SERVER_URL",
-            "\"${providers.environmentVariable("PAGER_DEFAULT_URL").orNull ?: "http://192.168.3.4:8766/"}\"",
+            // Intentionally empty: first launch must let the user enter a
+            // server endpoint instead of defaulting to a machine-specific LAN
+            // address. CI may inject PAGER_DEFAULT_URL for scripted builds.
+            "\"${providers.environmentVariable("PAGER_DEFAULT_URL").orNull ?: ""}\"",
         )
         providers.environmentVariable("PAGER_APP_LABEL").orNull?.let { label ->
             resValue("string", "app_name", label)

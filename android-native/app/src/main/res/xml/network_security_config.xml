@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">192.168.3.4</domain>
-    </domain-config>
+<!-- Cleartext HTTP must be reachable for user-entered private LAN relays, and
+     Android network security config cannot express CIDR ranges. Access control
+     therefore lives in the app layer: ServerEndpoint.parse accepts HTTP only
+     for private/local IPv4 literals (10/8, 172.16/12, 192.168/16, loopback),
+     and SecureWebViewController.shouldInterceptRequest blocks every other
+     cleartext request, including all public HTTP, at the WebView boundary.
+     HTTPS is always allowed and mixed content is rejected by WebSettings.
+     tools:ignore is scoped to this element only: the OS-level allowance is the
+     enabler for the LAN journey, never the trust boundary. -->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration" />
 </network-security-config>

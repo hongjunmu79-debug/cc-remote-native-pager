@@ -46,6 +46,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import dev.ccremote.pager.PagerUiState
+import dev.ccremote.pager.data.ServerEndpoint
 import dev.ccremote.pager.domain.PagerEngine
 import dev.ccremote.pager.domain.PagerEngineFilter
 import dev.ccremote.pager.domain.PagerTask
@@ -67,6 +68,7 @@ fun PagerDashboard(
 ) {
     var expandedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    var autoRequestedSetup by rememberSaveable { mutableStateOf(false) }
     var engineFilter by rememberSaveable { mutableStateOf(PagerEngineFilter.ALL) }
     val visibleTasks = remember(state.tasks, engineFilter) {
         state.tasks.forEngine(engineFilter)
@@ -76,6 +78,15 @@ fun PagerDashboard(
     LaunchedEffect(engineFilter) {
         expandedTaskId = null
         if (visibleTasks.isNotEmpty()) listState.scrollToItem(0)
+    }
+
+    // First-launch entry: no server endpoint configured (the build ships no
+    // default), so open the setup dialog once until the user saves an address.
+    LaunchedEffect(state.endpoint) {
+        if (state.endpoint == null && !autoRequestedSetup) {
+            autoRequestedSetup = true
+            settingsOpen = true
+        }
     }
 
     Scaffold(
@@ -158,7 +169,7 @@ fun PagerDashboard(
 
     if (settingsOpen) {
         PagerSettingsDialog(
-            initialUrl = state.endpoint.url,
+            initialUrl = state.endpoint?.url ?: "",
             feedbackEnabled = state.feedbackEnabled,
             onDismiss = { settingsOpen = false },
             onSave = { url ->
@@ -279,11 +290,13 @@ private fun FilteredDashboardEmpty(filter: PagerEngineFilter) {
 @Composable
 private fun ConnectionBanner(state: PagerUiState) {
     val label = when {
+        state.endpoint == null -> "尚未配置服务器 · 请在设置中填写 cc-remote 地址"
         !state.bridgeConnected -> "原生桥已失联 · 网页可能正在登录或重载"
         !state.wrapperOnline -> "电脑端 Wrapper 离线"
         else -> "连接正常 · ${state.tasks.size} 个任务"
     }
     val color = when {
+        state.endpoint == null -> PagerColors.Yellow
         !state.bridgeConnected -> PagerColors.Red
         !state.wrapperOnline -> PagerColors.Yellow
         else -> PagerColors.Green
@@ -350,6 +363,31 @@ private fun PagerSettingsDialog(
     onFeedbackEnabled: (Boolean) -> Unit,
 ) {
     var url by rememberSaveable(initialUrl) { mutableStateOf(initialUrl) }
+    var pendingHttpUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    val parsed = remember(url) { ServerEndpoint.parse(url.trim()).getOrNull() }
+    val isCleartextHttp = parsed != null && parsed.url.startsWith("http://")
+
+    if (pendingHttpUrl != null) {
+        AlertDialog(
+            onDismissRequest = { pendingHttpUrl = null },
+            title = { Text("明文 HTTP 警告") },
+            text = {
+                Text(
+                    "该地址使用未加密的 HTTP，任何能监听网络的人都能读取登录凭证和" +
+                        "会话内容。仅限在可信局域网内连接私有/本地 IP 时继续。",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val confirm = pendingHttpUrl
+                    pendingHttpUrl = null
+                    if (confirm != null) onSave(confirm)
+                }) { Text("仍然继续") }
+            },
+            dismissButton = { TextButton(onClick = { pendingHttpUrl = null }) { Text("取消") } },
+        )
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("原生看板设置") },
@@ -359,7 +397,15 @@ private fun PagerSettingsDialog(
                     value = url,
                     onValueChange = { url = it.take(2_048) },
                     label = { Text("cc-remote 地址") },
-                    supportingText = { Text("局域网 HTTP 仅允许当前 192.168.3.4 主机") },
+                    supportingText = {
+                        Text(
+                            if (isCleartextHttp) {
+                                "明文 HTTP：仅限可信局域网的私有/本地 IP，流量不加密"
+                            } else {
+                                "支持 HTTPS 任意地址；明文 HTTP 仅限私有/本地 IP"
+                            },
+                        )
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -384,7 +430,17 @@ private fun PagerSettingsDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onSave(url.trim()) }, enabled = url.isNotBlank()) {
+            Button(
+                onClick = {
+                    val trimmed = url.trim()
+                    if (trimmed.lowercase().startsWith("http://")) {
+                        pendingHttpUrl = trimmed
+                    } else {
+                        onSave(trimmed)
+                    }
+                },
+                enabled = url.isNotBlank(),
+            ) {
                 Text("保存并重载")
             }
         },

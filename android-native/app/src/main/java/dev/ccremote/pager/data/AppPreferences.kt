@@ -18,7 +18,7 @@ import kotlinx.serialization.json.Json
 private val Context.nativePagerDataStore by preferencesDataStore("native_pager")
 
 data class PagerPreferences(
-    val endpoint: ServerEndpoint,
+    val endpoint: ServerEndpoint?,
     val seenRevisions: Map<String, String>,
     val feedbackEnabled: Boolean,
 )
@@ -44,8 +44,12 @@ data class ServerEndpoint private constructor(
                 "当前版本只支持服务器根地址"
             }
             if (uri.scheme == "http") {
-                require(uri.host == "192.168.3.4") {
-                    "明文 HTTP 仅允许当前受信任局域网主机 192.168.3.4"
+                // Cleartext HTTP is accepted only for explicit private/local
+                // IPv4 literals (RFC1918 10/8, 172.16/12, 192.168/16, loopback).
+                // Public HTTP, hostnames, IPv6, userinfo, query strings and
+                // fragments are rejected before a page ever loads.
+                require(isPrivateOrLocalIpLiteral(uri.host)) {
+                    "明文 HTTP 仅允许私有或本地 IP 地址（如 192.168.x.x）"
                 }
             }
             val defaultPort = if (uri.scheme == "https") 443 else 80
@@ -61,10 +65,27 @@ data class ServerEndpoint private constructor(
             ServerEndpoint(normalized, origin)
         }
 
-        val Default: ServerEndpoint by lazy {
-            parse(BuildConfig.DEFAULT_SERVER_URL).getOrThrow()
+        /** The build-time default endpoint, or null when the build ships no
+         *  default (first launch must let the user enter one). */
+        val Default: ServerEndpoint? by lazy {
+            BuildConfig.DEFAULT_SERVER_URL.takeIf { it.isNotBlank() }
+                ?.let { parse(it).getOrNull() }
         }
     }
+}
+
+/** True when [host] is an IPv4 literal in a private/local range: 10/8,
+ *  172.16/12, 192.168/16, or 127/8 loopback. Hostnames and IPv6 literals
+ *  return false so cleartext HTTP cannot target a public host. */
+internal fun isPrivateOrLocalIpLiteral(host: String?): Boolean {
+    val octets = host?.split('.')?.map(String::toIntOrNull) ?: return false
+    if (octets.size != 4 || octets.any { it == null || it !in 0..255 }) return false
+    val a = octets[0]!!
+    val b = octets[1]!!
+    return a == 10 ||
+        (a == 172 && b in 16..31) ||
+        (a == 192 && b == 168) ||
+        a == 127
 }
 class AppPreferences(
     private val context: Context,

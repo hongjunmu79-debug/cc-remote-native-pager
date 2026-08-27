@@ -11,6 +11,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -19,11 +20,12 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import dev.ccremote.pager.BuildConfig
 import dev.ccremote.pager.data.ServerEndpoint
+import dev.ccremote.pager.data.isPrivateOrLocalIpLiteral
 import org.json.JSONObject
 
 class SecureWebViewController(
     private val activity: Activity,
-    initialEndpoint: ServerEndpoint,
+    initialEndpoint: ServerEndpoint?,
     private val onBridgeMessage: (String) -> Unit,
     private val onPageProblem: (String?) -> Unit,
     private val fileChooser: FileChooser,
@@ -38,11 +40,13 @@ class SecureWebViewController(
 
     init {
         configureWebView()
-        installBridge(initialEndpoint)
-        webView.loadUrl(initialEndpoint.url)
+        // A null endpoint means first launch: the app has no server configured
+        // yet, so the WebView stays blank until the user enters one.
+        endpoint?.let { installBridge(it) }
+        endpoint?.let { webView.loadUrl(it.url) }
     }
 
-    fun reconfigure(next: ServerEndpoint) {
+    fun reconfigure(next: ServerEndpoint?) {
         if (next == endpoint) return
         endpoint = next
         if (bridgeInstalled
@@ -50,6 +54,10 @@ class SecureWebViewController(
         ) {
             WebViewCompat.removeWebMessageListener(webView, BRIDGE_OBJECT)
             bridgeInstalled = false
+        }
+        if (next == null) {
+            webView.stopLoading()
+            return
         }
         installBridge(next)
         webView.loadUrl(next.url)
@@ -159,6 +167,27 @@ class SecureWebViewController(
                 return true
             }
 
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest,
+            ): WebResourceResponse? {
+                // WebView-level enforcement of the cleartext policy: every
+                // resource load (including subresources) must be HTTPS or a
+                // private/local HTTP IP. Public HTTP and unknown schemes are
+                // blocked here even if some script tries to load them.
+                if (!isAllowedResource(request.url)) {
+                    return WebResourceResponse(
+                        "text/plain",
+                        "utf-8",
+                        403,
+                        "Blocked by cc-remote cleartext policy",
+                        emptyMap(),
+                        null,
+                    )
+                }
+                return null
+            }
+
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 onPageProblem(null)
             }
@@ -190,7 +219,7 @@ class SecureWebViewController(
                 BRIDGE_OBJECT,
                 setOf(value.origin),
             ) { _, message, sourceOrigin, isMainFrame, _ ->
-                if (!isMainFrame || sourceOrigin.toString() != endpoint.origin) {
+                if (!isMainFrame || sourceOrigin.toString() != endpoint?.origin) {
                     return@addWebMessageListener
                 }
                 message.data?.let(onBridgeMessage)
@@ -202,6 +231,7 @@ class SecureWebViewController(
     }
 
     private fun isAllowedNavigation(uri: Uri): Boolean {
+        val current = endpoint ?: return false
         val port = when {
             uri.port != -1 -> uri.port
             uri.scheme == "https" -> 443
@@ -214,7 +244,15 @@ class SecureWebViewController(
             val defaultPort = if (uri.scheme == "https") 443 else 80
             if (port != defaultPort) append(":$port")
         }
-        return targetOrigin == endpoint.origin
+        return targetOrigin == current.origin
+    }
+
+    private fun isAllowedResource(uri: Uri): Boolean {
+        when (uri.scheme) {
+            "https" -> return true
+            "http" -> return isPrivateOrLocalIpLiteral(uri.host)
+            else -> return false
+        }
     }
 
     fun openWebViewSettings() {

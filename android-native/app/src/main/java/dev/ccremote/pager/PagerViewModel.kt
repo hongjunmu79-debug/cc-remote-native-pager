@@ -36,7 +36,7 @@ data class PagerUiState(
     val bridgeConnected: Boolean = false,
     val wrapperOnline: Boolean = false,
     val machineId: String = "",
-    val endpoint: ServerEndpoint = ServerEndpoint.Default,
+    val endpoint: ServerEndpoint? = null,
     val feedbackEnabled: Boolean = true,
 )
 
