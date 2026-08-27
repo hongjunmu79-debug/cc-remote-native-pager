@@ -63,7 +63,7 @@ job `needs: verify`. **A failure in any gate makes publication impossible.**
 | --- | --- |
 | `verify` | Runs the canonical metadata validator, the tag/version contract check, full Python + web tests/lint, `shellcheck`, `bash -n`, and `git diff --check`. |
 | `build` (matrix) | Builds deterministic Linux/macOS role bundles (`relay`/`wrapper` × `x86_64`/`arm64`) from source with `deploy.build_release`, then installs the bundle into a scratch venv and imports the packaged role. |
-| `build-windows` | Builds the deterministic Windows archive with `packaging\windows\build.ps1` (source-built `web/dist`, no shipped `.venv`, no Node LAN proxy), plus its `.sha256`. |
+| `build-windows` | Builds exactly three Windows release artifacts with `packaging\windows\build.ps1` (source-built `web/dist`, no shipped `.venv`, no Node LAN proxy): the installer/bootstrap zip, the portable zip, and a genuine Inno Setup installer `.exe`, each with its own `.sha256` sidecar. ISCC (Inno Setup) is a hard dependency — if it is unavailable the build fails closed instead of emitting a fake installer. |
 | `build-android` | Runs Android unit tests + `lintDebug`, then `assembleRelease`. A tag push is **fail-closed**: both `PAGER_KEYSTORE_B64` and `PAGER_SIGNING_PROPERTIES` must be present and the assembled APK's signer SHA-256 must equal the canonical fingerprint in `deploy/release-metadata.json`, otherwise the job fails and nothing is published. A manual `workflow_dispatch` run may assemble an unsigned APK for validation only — it has no publish path. |
 | `publish` | Downloads all build artifacts, assembles `SHA256SUMS`, runs `actions/attest` for attestations, and creates/uploads/publishes the GitHub Release. Refuses to replace an already-published release. Runs only on tag pushes. |
 
@@ -72,8 +72,10 @@ job `needs: verify`. **A failure in any gate makes publication impossible.**
 - **Linux/macOS bundles:** built by `deploy/build_release.py` in CI. They embed a
   pinned `uv`, the hashed role lockfile, the MIT license, and the release
   manifest. Byte-identical for the same git SHA + `SOURCE_DATE_EPOCH` + sources.
-- **Windows archive:** built by `packaging\windows\build.ps1` → deterministic
-  zip + `distribution-manifest.json` (per-file SHA-256) + outer `.sha256`.
+- **Windows:** built by `packaging\windows\build.ps1` → two deterministic zips
+  (installer/bootstrap and portable) + one genuine Inno Setup installer `.exe`,
+  each with a `.sha256` sidecar, all assembled from one staged, smoke-verified
+  payload. The installer build fails closed if ISCC (Inno Setup) is absent.
   See [`packaging/windows/README.md`](../../packaging/windows/README.md).
 - **Android APK:** built by Gradle in `android-native/`. Release assets come
   from CI only — do not manually upload a machine-built APK.
@@ -112,19 +114,23 @@ application id is `dev.ccremote.lan`, and the version code strictly increased.
 
 ### Windows
 
-Authenticode signing is **optional and CI-secret-driven**. The workflow builds
-and verifies the archive unsigned; if a code-signing certificate is later made
-available as a secret, sign the produced `.zip` (and `setup.ps1`) in a
-follow-up CI step. Never commit or invent a certificate. Local builds are
+Authenticode signing is **optional and CI-secret-driven**. The genuine Inno
+Setup installer `.exe` is the primary Authenticode target; the `.zip` packages
+are integrity-protected by their `.sha256` sidecars and release attestations,
+not by code signing. The workflow builds and verifies all Windows artifacts
+unsigned. If a real code-signing certificate is later provisioned as a secret,
+a separately designed CI step may sign the installer `.exe` — and, separately,
+scripts such as `setup.ps1` — but no such step exists today, so current
+artifacts ship unsigned. Never commit or invent a certificate. Local builds are
 explicitly unsigned and `win_smoke` documents that in the distribution
 manifest/notes.
 
 ## Checksums and attestations
 
 `publish` computes `SHA256SUMS` over every release asset (`cc-remote-*.tar.gz`,
-`cc-remote-*.zip`, `cc-remote-*.zip.sha256`, `*.apk`, `install.sh`) and attaches
-`actions/attest` provenance. Users verify downloads with `sha256sum -c` /
-`shasum -a 256 -c`.
+`cc-remote-*.zip`, `cc-remote-*.zip.sha256`, `cc-remote-*.exe`,
+`cc-remote-*.exe.sha256`, `*.apk`, `install.sh`) and attaches `actions/attest`
+provenance. Users verify downloads with `sha256sum -c` / `shasum -a 256 -c`.
 
 ## Version bump procedure
 
@@ -167,7 +173,8 @@ manifest/notes.
 These cannot be verified inside CI and need the parent acceptance owner or a
 maintainer:
 
-- A clean-VM install/upgrade/rollback run of the Windows archive.
+- A clean-VM install/upgrade/rollback run of the Windows installer and
+  portable artifacts.
 - On-device Android verification (bridge behavior, endpoint entry, IME, WebView
   enforcement) with a real ADB device.
 - Android keystore / signing-password provisioning and a signed-APK verify.
