@@ -84,6 +84,13 @@ configuration from a properties file whose path is exported as
 `PAGER_SIGNING_PROPERTIES`; CI decodes the keystore from the
 `PAGER_KEYSTORE_B64` secret and co-locates both under `$RUNNER_TEMP/pager-keys/`.
 
+> **Workflow gotcha:** the `secrets` context is **not available in `if:`
+> conditions**. Referencing it there makes GitHub fail the whole run at startup
+> with `Unrecognized named-value: 'secrets'` and schedules zero jobs. The
+> signing step always runs and the bash guard decides from the
+> `PAGER_KEYSTORE_B64` / `PAGER_SIGNING_PROPERTIES` environment variables;
+> absent secrets yield an unsigned release APK.
+
 > **External dependency:** the keystore, alias, and passwords are not in this
 > repository and cannot be reconstructed here. They must be provisioned as
 > repository/environment secrets. If that signing material is unavailable to CI,
