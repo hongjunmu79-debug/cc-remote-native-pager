@@ -11,7 +11,9 @@ known folders), never baked into the distribution.
 """
 from __future__ import annotations
 
+import ntpath
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -106,7 +108,12 @@ def validate_workspace(value: str) -> list[str]:
         return ["workspace must not be empty"]
     if "\x00" in value or len(value.encode("utf-8", errors="surrogatepass")) > 4096:
         return ["workspace must be a path of at most 4096 UTF-8 bytes"]
-    if not os.path.isabs(value):
+    # The packaged distribution only ever runs on Windows, but the zero-token
+    # test suite runs on any host (Windows CI, Ubuntu CI). Accept an absolute
+    # path under either rule set: ntpath covers ``C:\...`` and ``\\server\share``;
+    # posixpath covers ``/...``. ntpath.isabs alone is not enough — it treats a
+    # leading ``/`` as relative, so POSIX-style workspaces must be checked too.
+    if not (ntpath.isabs(value) or posixpath.isabs(value)):
         return ["workspace must be an absolute path"]
     return []
 

@@ -308,13 +308,21 @@ jobs:
         working-directory: android-native
         run: ./gradlew lintDebug
       - name: Configure release signing from secrets
-        if: ${{ secrets.PAGER_KEYSTORE_B64 != '' && secrets.PAGER_SIGNING_PROPERTIES != '' }}
         shell: bash
         env:
           PAGER_KEYSTORE_B64: ${{ secrets.PAGER_KEYSTORE_B64 }}
           PAGER_SIGNING_PROPERTIES: ${{ secrets.PAGER_SIGNING_PROPERTIES }}
         run: |
           set -euo pipefail
+          # The `secrets` context is not available in `if:` conditions, so this
+          # step always runs and the shell decides. An absent secret resolves
+          # to the empty string; when either secret is missing we build an
+          # unsigned release APK (CI gate only) and leave PAGER_SIGNING_PROPERTIES
+          # unset so Gradle does not try to configure a signing config.
+          if [ -z "$PAGER_KEYSTORE_B64" ] || [ -z "$PAGER_SIGNING_PROPERTIES" ]; then
+            echo "release signing secrets are not configured; building an unsigned release APK"
+            exit 0
+          fi
           mkdir -p "$RUNNER_TEMP/pager-keys"
           printf '%s' "$PAGER_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/pager-keys/pager.keystore"
           # storeFile in the properties is relative to the properties file's

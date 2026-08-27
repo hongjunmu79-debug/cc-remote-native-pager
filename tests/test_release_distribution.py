@@ -31,7 +31,9 @@ DISTRIBUTION_VERSION = load_release_metadata(
 
 
 def test_release_workflow_materializes_web_before_python_bundle_tests():
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
     verify_job = workflow.split("\n  build:\n", 1)[0]
 
     install = verify_job.index("npm --prefix web ci")
@@ -40,6 +42,39 @@ def test_release_workflow_materializes_web_before_python_bundle_tests():
 
     assert install < build < python_tests
     assert verify_job.count("npm --prefix web run build") == 1
+
+
+def test_ci_python_job_materializes_web_before_python_tests():
+    # The Ubuntu python job exercises the release-bundle tests, whose relay
+    # matrix entry needs a materialized web client. It must build web before
+    # running pytest, mirroring release.yml's verify job.
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    _, _, python_job = workflow.partition("\n  python:\n")
+    python_job, _, _ = python_job.partition("\n  python-windows:\n")
+
+    assert python_job.index("npm --prefix web ci") < python_job.index(
+        "npm --prefix web run build"
+    )
+    assert python_job.index("npm --prefix web run build") < python_job.index(
+        ".venv/bin/python -m pytest"
+    )
+
+
+def test_workflow_if_conditions_never_reference_secrets():
+    # The `secrets` context is not available in `if:` conditions. Referencing
+    # it there makes GitHub fail the whole run at startup with
+    # "Unrecognized named-value: 'secrets'", before any job is scheduled.
+    for workflow_name in (".github/workflows/release.yml", ".github/workflows/ci.yml"):
+        text = (ROOT / workflow_name).read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if not line.lstrip().startswith("if:"):
+                continue
+            assert "secrets." not in line, (
+                f"{workflow_name}:{line_no} references the secrets context in an "
+                "`if:` condition, which GitHub Actions rejects at workflow startup"
+            )
 
 
 def _fake_uv(tmp_path: Path) -> Path:
@@ -259,7 +294,7 @@ def test_release_bootstrap_fails_closed_before_download():
         capture_output=True,
     )
     assert invalid_version.returncode != 0
-    assert "exact semantic version" in invalid_version.stderr.lower()
+    assert "must be a semantic version" in invalid_version.stderr.lower()
 
     relay_on_mac = subprocess.run(
         [str(script), "relay"],

@@ -34,9 +34,11 @@ from cc_remote.protocol import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TS_PROTOCOL = (ROOT / "web/src/protocol.ts").read_text()
-TS_REDUCER = (ROOT / "web/src/reducer.ts").read_text()
-TS_PROCESS_TIMELINE = (ROOT / "web/src/components/ProcessTimeline.tsx").read_text()
+TS_PROTOCOL = (ROOT / "web/src/protocol.ts").read_text(encoding="utf-8")
+TS_REDUCER = (ROOT / "web/src/reducer.ts").read_text(encoding="utf-8")
+TS_PROCESS_TIMELINE = (ROOT / "web/src/components/ProcessTimeline.tsx").read_text(
+    encoding="utf-8"
+)
 
 
 def _without_typescript_comments(source: str) -> str:

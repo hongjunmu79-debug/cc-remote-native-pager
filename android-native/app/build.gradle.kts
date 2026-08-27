@@ -118,11 +118,16 @@ android {
         warningsAsErrors = true
         // Versions are deliberately compatibility-pinned for the production
         // toolchain. Renovation is handled as a separate tested upgrade.
+        // OldTargetApi is disabled because the pinned AGP (8.13.2) tops out at
+        // compileSdk 36; raising targetSdk to the newest API would require an
+        // AGP upgrade the repo does not yet pin, and it would still fail to
+        // resolve the `android-37` SDK platform on hosted runners.
         disable += setOf(
             "AndroidGradlePluginVersion",
             "GradleDependency",
             "NewerVersionAvailable",
             "ObsoleteSdkInt",
+            "OldTargetApi",
         )
     }
 
