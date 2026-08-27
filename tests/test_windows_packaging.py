@@ -1033,7 +1033,6 @@ def test_start_ps1_service_both_launches_concurrently_and_cleans_up(tmp_path: Pa
 def test_start_ps1_service_both_propagates_failure_and_stops_the_other(tmp_path: Path):
     # Failure variant: when the relay exits non-zero, start.ps1 must propagate
     # that exit code AND stop the still-running wrapper (no orphan).
-    import time
 
     install_root = tmp_path / "install-fail"
     venv_dir = install_root / "runtime" / ".venv"
