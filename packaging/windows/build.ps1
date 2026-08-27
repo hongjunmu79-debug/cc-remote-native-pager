@@ -120,7 +120,16 @@ Copy-Item -Force (Join-Path $PSScriptRoot "setup.ps1") (Join-Path $stageRoot "se
 $stagePackaging = Join-Path $stageRoot "packaging"
 New-Item -ItemType Directory -Force -Path (Join-Path $stagePackaging "windows") | Out-Null
 Copy-Item -Force (Join-Path (Split-Path $PSScriptRoot -Parent) "__init__.py") (Join-Path $stagePackaging "__init__.py")
-Copy-Item -Path (Join-Path $PSScriptRoot "*") -Destination (Join-Path $stagePackaging "windows") -Recurse -Force
+# Copy packaging/windows through the canonical clean-copy helper, NOT a raw
+# recursive Copy-Item. Running the Python packaging scripts above generates
+# packaging/windows/__pycache__/*.pyc on the build host; a raw copy shipped
+# those into both zips and the Inno Setup .exe (manual Release run
+# 33125872590). win_manifest.py --copy applies the same single-source exclusion
+# rules the payload staging uses and fails closed on symlinks.
+& $python (Join-Path $PSScriptRoot "win_manifest.py") --copy `
+    --source $PSScriptRoot `
+    --destination (Join-Path $stagePackaging "windows")
+if ($LASTEXITCODE -ne 0) { throw "packaging/windows clean-copy failed" }
 
 # --- Assemble the two deterministic archives ----------------------------------
 function Invoke-ArchiveAssembly {

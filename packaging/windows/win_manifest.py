@@ -151,6 +151,31 @@ def verify_distribution(root: Path, *, expected_version: str | None = None) -> l
     return problems
 
 
+def find_forbidden_entries(tree: Path) -> list[str]:
+    """Return dev-leftover problems anywhere under [tree] (empty = OK).
+
+    Scans an extracted release tree as a whole — including the archive root's
+    ``packaging/`` layer, not just the ``payload/`` subtree that
+    ``verify_distribution`` covers. The rule sets are the same single source
+    the manifest walker and the clean-copy helper use, so a cleaned payload and
+    a cleaned packaging tree can never disagree about what is forbidden.
+    """
+    problems: list[str] = []
+    for path in sorted(tree.rglob("*")):
+        if path.is_symlink():
+            problems.append(f"tree contains a symbolic link: {path}")
+            continue
+        if path.is_dir():
+            if path.name in _FORBIDDEN_DIRS:
+                problems.append(f"tree contains a {path.name} directory: {path}")
+            continue
+        if path.name in _SKIP_NAMES:
+            problems.append(f"tree contains an OS junk file: {path}")
+        elif path.suffix in _FORBIDDEN_SUFFIXES:
+            problems.append(f"tree contains a bytecode file: {path}")
+    return problems
+
+
 def assert_no_venv(tree: Path) -> list[str]:
     """Assert no ``.venv`` directory exists anywhere under [tree]."""
     return [

@@ -34,10 +34,9 @@ from packaging.windows.win_layout import InstallLayout
 from packaging.windows.win_manifest import (
     DistributionInfo,
     assert_no_venv,
-    build_manifest,
+    find_forbidden_entries,
     read_manifest,
     verify_distribution,
-    write_manifest,
 )
 
 FORBIDDEN_DEV_PATH_MARKERS = ("C:\\Users\\23715", "/Users/23715", "/home/23715")  # cc-remote-scan-allow: the markers the smoke gate guards against
@@ -164,14 +163,55 @@ def run_clean_install_smoke(dist_root: Path, temp_root: Path) -> list[str]:
     return problems
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Windows package clean-install smoke check")
-    parser.add_argument("--check", type=Path, required=True, help="staged distribution root")
-    parser.add_argument("--temp", type=Path, default=None, help="temp root (default: system temp)")
-    args = parser.parse_args()
-    temp_root = args.temp or Path(tempfile.gettempdir()) / "cc-remote-windows-smoke"
-    temp_root.mkdir(parents=True, exist_ok=True)
-    problems = run_clean_install_smoke(args.check, temp_root)
+    parser.add_argument("--check", type=Path, default=None, help="staged distribution root to clean-install smoke")
+    parser.add_argument(
+        "--check-tree", type=Path, default=None,
+        help="extracted release tree to scan for forbidden dev entries",
+    )
+    parser.add_argument(
+        "--temp", type=Path, default=None,
+        help=(
+            "temp root to run the clean-install smoke in and keep; when omitted "
+            "a fresh per-invocation directory is created and deleted"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    if args.check_tree is not None:
+        problems = find_forbidden_entries(args.check_tree)
+        if problems:
+            print("TREE CHECK FAILED:", file=sys.stderr)
+            for problem in problems:
+                print("  - " + problem, file=sys.stderr)
+            return 1
+        print("tree check passed")
+        return 0
+
+    if args.check is None:
+        parser.error("specify --check ROOT or --check-tree ROOT")
+
+    if args.temp is not None:
+        # An explicit --temp is caller-owned: it is used verbatim and never
+        # deleted, so a caller can reuse one root across invocations and manage
+        # its lifecycle itself.
+        temp_root = args.temp
+        temp_root.mkdir(parents=True, exist_ok=True)
+        problems = run_clean_install_smoke(args.check, temp_root)
+    else:
+        # Fresh per-invocation default: build.ps1 and the release verify step
+        # invoke this CLI several times in separate processes, so a fixed
+        # default would collide on the leftover install/upgrade trees of the
+        # previous run (manual Release run 33125872590). mkdtemp gives this
+        # invocation a uniquely-named root it alone owns; the finally always
+        # removes it, and never touches a broader user/system temp directory.
+        temp_root = Path(tempfile.mkdtemp(prefix="cc-remote-windows-smoke-"))
+        try:
+            problems = run_clean_install_smoke(args.check, temp_root)
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
     if problems:
         print("SMOKE FAILED:", file=sys.stderr)
         for problem in problems:

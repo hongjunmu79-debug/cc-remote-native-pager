@@ -1,4 +1,4 @@
-# ACCEPTANCE_FIXES.md — release-hardening rounds 2–3, 6–7
+# ACCEPTANCE_FIXES.md — release-hardening rounds 2–3, 6–8
 
 What was fixed in this round, the exact commands used to verify it, and the
 honest limitations of the local verification. Everything here is zero-token
@@ -6,6 +6,121 @@ unless stated otherwise.
 
 Branch: `codex/release-hardening`. No main merge, no tag, no release was
 created by this work.
+
+## Round 8: manual Release run — smoke temp collision + packaging `__pycache__` leak
+
+The failed manual Release `workflow_dispatch` (GitHub run 33125872590, Windows
+job 98703975754) built both ZIPs and a real Inno `.exe`, but the verify step
+failed on the portable ZIP:
+
+```
+FileExistsError WinError 183 at win_smoke.py line 158 shutil.copytree(dist_root, upgrade_root)
+```
+
+### 8.1 Root cause: the smoke CLI's fixed default temp root collided across invocations
+
+`win_smoke.py`'s CLI used a fixed default temp root
+(`%TEMP%\cc-remote-windows-smoke`) and never cleaned it up. `build.ps1` runs
+the smoke once during the build, and release.yml's verify step runs it once per
+extracted ZIP (two more times), all in separate processes. The second
+invocation reused the leftover `install`/`upgrade` trees of the first, so
+`shutil.copytree(dist_root, upgrade_root)` failed because `upgrade` already
+existed. This is deterministic and would block every tag release.
+
+**Fix** — when `--temp` is omitted, the CLI now creates a fresh, uniquely-named
+root per invocation (`tempfile.mkdtemp(prefix="cc-remote-windows-smoke-")`) and
+deletes it in a `finally` block, so repeated or concurrent invocations never
+share a temp root and nothing is left for the next run to collide with. The
+ownership boundary is explicit: an explicit `--temp` is caller-owned — it is
+used verbatim, created if missing, and never deleted. The CLI never recursively
+deletes a broad user/system temp directory; only the `mkdtemp` directory this
+invocation alone owns is removed.
+
+### 8.2 Root cause: `packaging/windows/__pycache__` leaked into the ZIPs and the Inno `.exe`
+
+The Inno Setup compiler log showed it explicitly packing
+`packaging/windows/__pycache__/win_config.cpython-314.pyc` (plus `win_layout…`
+and `win_manifest…`). `build.ps1` runs the Python packaging scripts, which
+generate bytecode in `packaging/windows/__pycache__`, and then did a raw
+recursive `Copy-Item -Path packaging\windows\* -Destination … -Recurse`, so
+the bytecode entered both ZIPs and the installer `.exe`.
+
+**Fix** — build.ps1 now stages `packaging/windows` through the canonical
+clean-copy helper (`win_manifest.py --copy`), reusing the same single-source
+exclusion rules the payload staging already used (`__pycache__`, `.pyc`/`.pyo`,
+`.venv`, `.git`, `node_modules`, `.DS_Store`, `Thumbs.db`) and failing closed
+on symlinks. The raw recursive `Copy-Item` is gone.
+
+### 8.3 Release verify contract: whole-extracted-tree scan
+
+The `build-windows` verify step now runs `win_smoke.py --check-tree <dest>` on
+each extracted ZIP in addition to the payload smoke. The new
+`win_manifest.find_forbidden_entries` scans the ENTIRE extracted archive (the
+`packaging/` layer as well as `payload/`) with the same rule sets, so a
+packaging-layer leftover can never slip past the payload-only clean-install
+smoke again.
+
+### 8.4 Regression coverage (executable, not static-only)
+
+- `test_smoke_cli_default_temp_is_unique_and_auto_cleaned` — drives
+  `win_smoke.main()` twice without `--temp`, proves both pass, proves the two
+  runs used different temp roots, and proves every root the CLI created was
+  deleted (nothing remains under the redirected system temp).
+- `test_smoke_cli_explicit_temp_is_preserved` — proves an explicit `--temp` is
+  used and kept after the run.
+- `test_build_ps1_clean_copy_cli_filters_packaging_leftovers` — runs the exact
+  production `win_manifest.py --copy --source … --destination …` CLI against a
+  seeded `packaging/windows` source and proves no `__pycache__`/`.pyc`/`.pyo`/
+  OS junk reaches the staged tree.
+- `test_release_archives_never_carry_packaging_dev_leftovers` — builds BOTH
+  zips (installer + portable) from a packaging tree seeded with leftovers and
+  asserts no forbidden entry appears anywhere in either archive's name list.
+- `test_build_ps1_stages_packaging_via_clean_copy_not_raw_copy` — static guard
+  that build.ps1 calls `--copy` and the raw `Copy-Item -Path …\*` is gone.
+- `test_release_verify_contract_scans_extracted_tree_for_forbidden_entries` —
+  static guard that release.yml's verify step runs `--check-tree` per zip.
+- `test_smoke_check_tree_cli_detects_forbidden_entries` — drives the real
+  `win_smoke.py --check-tree` CLI via subprocess on clean and dirty trees.
+- `test_find_forbidden_entries_*` and
+  `test_copy_distribution_fails_closed_on_symlink` — unit coverage of the new
+  tree scanner and the fail-closed symlink contract (the symlink tests skip on
+  hosts without symlink privileges and run on Ubuntu CI).
+
+### Verification (exact commands and results)
+
+```
+.venv\Scripts\python.exe -m pytest tests/test_windows_packaging.py -q
+# => 85 passed, 2 skipped (symlink tests skip without symlink privileges)
+
+# The exact ci.yml python-windows set (packaging + import-compat + metadata +
+# the 11 curated release-distribution contracts):
+.venv\Scripts\python.exe -m pytest `
+  tests/test_windows_packaging.py tests/test_windows_import_compat.py tests/test_release_metadata.py `
+  <the 11 curated test_release_distribution.py node IDs> -q
+# => 112 passed, 2 skipped
+
+uvx --from ruff==0.15.13 ruff check cc_remote tests deploy   # All checks passed
+git diff --check                                              # clean
+```
+
+Two real subprocess smoke runs with the system temp redirected to
+`C:\Users\Public` (outside the dev-machine marker paths) both printed
+`smoke check passed` with exit 0, and no `cc-remote-windows-smoke-*` directory
+remained afterwards. A `win_manifest.py --copy` run against the real
+`packaging/windows` tree (which carries a live `__pycache__` on this machine)
+staged a clean tree, and `win_smoke.py --check-tree` returned exit 0 on a clean
+tree and exit 1 naming the `__pycache__`/bytecode entries on a seeded tree.
+
+### Honest limitations
+
+- The full three-artifact `build.ps1` run (including the ISCC-compiled `.exe`)
+  still happens on the windows-2025 CI runner; locally the clean-copy staging
+  step was exercised against the real `packaging/windows` tree with the exact
+  `win_manifest.py --copy` CLI, and the zips were built and inspected by the
+  archive regression tests. Inno Setup is not installed on this machine.
+- The symlink fail-closed tests skip on hosts without symlink privileges (this
+  machine) and run on Ubuntu CI; `copy_distribution` has always failed closed
+  on symlinks, and the new `find_forbidden_entries` reports them.
 
 ## Round 7: manual Release run — build.ps1 archive-loop stdout contamination
 

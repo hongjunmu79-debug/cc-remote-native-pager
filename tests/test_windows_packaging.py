@@ -77,6 +77,26 @@ def make_distribution(dist: Path, *, git_sha: str = "0" * 40) -> Path:
     return dist
 
 
+def _packaging_source_with_leftovers(root: Path) -> Path:
+    """A ``packaging/windows``-shaped source tree carrying dev leftovers.
+
+    The leftovers mirror what a real build host accumulates: running the Python
+    packaging scripts generates ``packaging/windows/__pycache__/*.pyc`` (the
+    Inno log of manual Release run 33125872590 showed exactly these being
+    packed), plus stale top-level bytecode and OS junk.
+    """
+    source = root / "packaging-src"
+    (source / "inno").mkdir(parents=True)
+    (source / "setup.ps1").write_text("# setup\n", encoding="utf-8")
+    (source / "win_config.py").write_text("import json\n", encoding="utf-8")
+    (source / "inno" / "cc-remote.iss").write_text("[Setup]\n", encoding="utf-8")
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "win_config.cpython-314.pyc").write_bytes(b"\x00")
+    (source / "win_manifest.pyc").write_bytes(b"\x00")
+    (source / ".DS_Store").write_bytes(b"\x00")
+    return source
+
+
 # ---------------------------------------------------------------------------
 # win_config
 # ---------------------------------------------------------------------------
@@ -497,6 +517,65 @@ def test_copy_distribution_filters_junk(tmp_path: Path):
     assert not (dest / "__pycache__").exists()
 
 
+def test_copy_distribution_fails_closed_on_symlink(tmp_path: Path):
+    # The clean-copy helper refuses to copy a tree that contains a symlink: a
+    # link could point outside the staged tree and leak an arbitrary file into
+    # the release artifacts. Failing closed is the contract.
+    source = tmp_path / "src"
+    source.mkdir()
+    target = tmp_path / "target.txt"
+    target.write_text("x", encoding="utf-8")
+    try:
+        (source / "linked").symlink_to(target)
+    except OSError:
+        pytest.skip("creating symlinks requires privileges on this host")
+    with pytest.raises(win_manifest.ManifestError, match="symbolic link"):
+        win_manifest.copy_distribution(source, tmp_path / "dst")
+
+
+def test_find_forbidden_entries_covers_dirs_files_and_junk(tmp_path: Path):
+    # The whole-tree scan (release.yml ``--check-tree``) must report the same
+    # rule sets the manifest walker and clean-copy helper enforce: forbidden
+    # directories, bytecode files, and OS junk — anywhere in the tree.
+    tree = tmp_path / "tree"
+    (tree / "packaging" / "windows").mkdir(parents=True)
+    (tree / "packaging" / "windows" / "__pycache__").mkdir()
+    (tree / "packaging" / "windows" / "__pycache__" / "x.pyc").write_bytes(b"\x00")
+    (tree / "payload").mkdir()
+    (tree / "payload" / "junk.pyo").write_bytes(b"\x00")
+    (tree / "payload" / ".DS_Store").write_bytes(b"\x00")
+    problems = win_manifest.find_forbidden_entries(tree)
+    assert any("__pycache__" in problem for problem in problems)
+    assert any("bytecode" in problem for problem in problems)
+    assert any("OS junk" in problem for problem in problems)
+
+
+def test_find_forbidden_entries_flags_symlinks(tmp_path: Path):
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    target = tmp_path / "target"
+    target.write_text("x", encoding="utf-8")
+    try:
+        (tree / "linked").symlink_to(target)
+    except OSError:
+        pytest.skip("creating symlinks requires privileges on this host")
+    problems = win_manifest.find_forbidden_entries(tree)
+    assert any("symbolic link" in problem for problem in problems)
+
+
+def test_find_forbidden_entries_accepts_clean_extracted_release(tmp_path: Path):
+    # A clean extracted archive root (setup.ps1 + packaging/windows + payload)
+    # has no forbidden entries anywhere.
+    tree = tmp_path / "tree"
+    (tree / "packaging" / "windows").mkdir(parents=True)
+    (tree / "packaging" / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
+    (tree / "packaging" / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
+    (tree / "payload" / "cc_remote").mkdir(parents=True)
+    (tree / "payload" / "cc_remote" / "__init__.py").write_text("x\n", encoding="utf-8")
+    (tree / "setup.ps1").write_text("# setup\n", encoding="utf-8")
+    assert win_manifest.find_forbidden_entries(tree) == []
+
+
 # ---------------------------------------------------------------------------
 # win_smoke
 # ---------------------------------------------------------------------------
@@ -571,6 +650,104 @@ def test_smoke_rejects_old_lan_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     )
     problems = win_smoke.run_clean_install_smoke(dist, tmp_path / "y")
     assert any("old machine-specific LAN IP" in problem for problem in problems)
+
+
+def test_smoke_cli_default_temp_is_unique_and_auto_cleaned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # build.ps1 and the release verify step invoke the smoke CLI in separate
+    # processes with no --temp (manual Release run 33125872590). Each
+    # invocation must get its own fresh temp root — two sequential runs without
+    # --temp must both pass — and must delete that root on exit, never leaving
+    # a fixed default behind for the next run to collide with.
+    dist = make_distribution(tmp_path / "dist")
+    neutral = tmp_path / "neutral-temp"
+    neutral.mkdir()
+    monkeypatch.setattr(win_smoke.tempfile, "gettempdir", lambda: str(neutral))
+    # A fresh config rendered under the pytest temp (which lives under the dev
+    # machine's own home on this host) would trip the real dev-path gate; the
+    # gate is not what this test is about.
+    monkeypatch.setattr(
+        win_smoke,
+        "FORBIDDEN_DEV_PATH_MARKERS",
+        ("C:\\Users\\__not_a_real_user__",),
+    )
+
+    created: list[Path] = []
+    removed: list[Path] = []
+    real_mkdtemp = win_smoke.tempfile.mkdtemp
+    real_rmtree = win_smoke.shutil.rmtree
+
+    def recording_mkdtemp(*args, **kwargs):
+        path = Path(real_mkdtemp(*args, **kwargs))
+        created.append(path)
+        return str(path)
+
+    def recording_rmtree(*args, **kwargs):
+        removed.append(Path(args[0]))
+        return real_rmtree(*args, **kwargs)
+
+    monkeypatch.setattr(win_smoke.tempfile, "mkdtemp", recording_mkdtemp)
+    monkeypatch.setattr(win_smoke.shutil, "rmtree", recording_rmtree)
+
+    for _ in range(2):
+        assert win_smoke.main(["--check", str(dist)]) == 0
+
+    # Uniqueness: each invocation created (and owned) a different root.
+    assert len(created) == 2
+    assert created[0] != created[1]
+    # Cleanup: every root this CLI created was removed on exit; nothing remains.
+    assert set(removed) == set(created)
+    assert list(neutral.glob("cc-remote-windows-smoke-*")) == []
+
+
+def test_smoke_cli_explicit_temp_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # An explicit --temp is caller-owned: the smoke runs inside it and it is
+    # NOT deleted on exit, so a caller can reuse one root across invocations.
+    dist = make_distribution(tmp_path / "dist")
+    monkeypatch.setattr(
+        win_smoke,
+        "FORBIDDEN_DEV_PATH_MARKERS",
+        ("C:\\Users\\__not_a_real_user__",),
+    )
+    explicit = tmp_path / "explicit-temp"
+    assert win_smoke.main(["--check", str(dist), "--temp", str(explicit)]) == 0
+    assert explicit.is_dir()
+    assert (explicit / "install").is_dir()
+    assert (explicit / "upgrade").is_dir()
+
+
+def test_smoke_check_tree_cli_detects_forbidden_entries(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[1]
+    win_smoke_py = repo_root / "packaging/windows/win_smoke.py"
+
+    clean = tmp_path / "clean-tree"
+    (clean / "packaging" / "windows").mkdir(parents=True)
+    (clean / "packaging" / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
+    (clean / "payload" / "cc_remote").mkdir(parents=True)
+    (clean / "payload" / "cc_remote" / "__init__.py").write_text("x\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(win_smoke_py), "--check-tree", str(clean)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "tree check passed" in proc.stdout
+
+    dirty = tmp_path / "dirty-tree"
+    (dirty / "packaging" / "windows" / "__pycache__").mkdir(parents=True)
+    (dirty / "packaging" / "windows" / "__pycache__" / "win_config.cpython-314.pyc").write_bytes(b"\x00")
+    (dirty / "payload").mkdir()
+    (dirty / "payload" / "junk.pyc").write_bytes(b"\x00")
+    proc = subprocess.run(
+        [sys.executable, str(win_smoke_py), "--check-tree", str(dirty)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode != 0
+    assert "TREE CHECK FAILED" in proc.stderr
+    assert "__pycache__" in proc.stderr
+    assert "bytecode" in proc.stderr
 
 
 def _render_with_origin(smoke_module, origin: str):
@@ -651,6 +828,81 @@ def test_build_release_archive_contents(tmp_path: Path):
         assert "payload/distribution-manifest.json" in names
         assert "payload/cc_remote/__init__.py" in names
         assert "payload/web/dist/index.html" in names
+
+
+def test_build_ps1_clean_copy_cli_filters_packaging_leftovers(tmp_path: Path):
+    # The exact production staging step build.ps1 uses: ``win_manifest.py
+    # --copy --source packaging/windows --destination <stage>/packaging/windows``.
+    # Seeded dev leftovers (the Inno log of manual Release run 33125872590
+    # showed packaging/windows/__pycache__/*.pyc being packed) must never reach
+    # the staged tree.
+    source = _packaging_source_with_leftovers(tmp_path)
+    dest = tmp_path / "staged-packaging"
+    dest.mkdir()
+    repo_root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(repo_root / "packaging/windows/win_manifest.py"),
+            "--copy",
+            "--source", str(source),
+            "--destination", str(dest),
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "setup.ps1").is_file()
+    assert (dest / "win_config.py").is_file()
+    assert (dest / "inno" / "cc-remote.iss").is_file()
+    assert not (dest / "__pycache__").exists()
+    assert not (dest / "win_manifest.pyc").exists()
+    assert not (dest / ".DS_Store").exists()
+    assert not any(path.suffix in (".pyc", ".pyo") for path in dest.rglob("*"))
+
+
+def test_release_archives_never_carry_packaging_dev_leftovers(tmp_path: Path):
+    # Both zip deliverables embed packaging/windows; a leftover that survived
+    # the clean-copy would show up in the archive's packaging layer, not just
+    # the payload subtree the smoke verifies.
+    import zipfile
+
+    source = _packaging_source_with_leftovers(tmp_path)
+    packaging = tmp_path / "staged-packaging"
+    win_manifest.copy_distribution(source, packaging)
+
+    dist = make_distribution(tmp_path / "dist")
+    setup = tmp_path / "setup.ps1"
+    setup.write_text("# setup\n", encoding="utf-8")
+    start_portable = tmp_path / "start-portable.ps1"
+    start_portable.write_text("# start-portable\n", encoding="utf-8")
+    pkg_init = tmp_path / "pkg-init.py"
+    pkg_init.write_text('"""pkg"""\n', encoding="utf-8")
+
+    installer = win_build.build_release_archive(
+        setup_ps1=setup,
+        packaging_dir=packaging,
+        payload=dist,
+        output_path=tmp_path / "installer.zip",
+        packaging_init=pkg_init,
+    )
+    portable = win_build.build_portable_archive(
+        start_portable=start_portable,
+        readme=None,
+        packaging_dir=packaging,
+        payload=dist,
+        output_path=tmp_path / "portable.zip",
+        packaging_init=pkg_init,
+    )
+    for archive in (installer, portable):
+        with zipfile.ZipFile(archive.path) as handle:
+            names = handle.namelist()
+        assert "packaging/windows/setup.ps1" in names
+        assert not any(
+            "__pycache__" in name
+            or name.endswith((".pyc", ".pyo"))
+            or name.endswith((".DS_Store", "Thumbs.db"))
+            for name in names
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -911,6 +1163,31 @@ def test_build_ps1_produces_three_artifacts():
     assert "--portable" in script
     assert "--start-portable" in script
     assert "build-installer.ps1" in script
+
+
+def test_build_ps1_stages_packaging_via_clean_copy_not_raw_copy():
+    # build.ps1 must stage packaging/windows through the canonical clean-copy
+    # helper (win_manifest.py --copy), which filters __pycache__/.pyc/pyo and
+    # OS junk and fails closed on symlinks. The old recursive Copy-Item shipped
+    # packaging/windows/__pycache__/*.pyc into both zips and the Inno Setup
+    # .exe (manual Release run 33125872590).
+    script = _repo_packaging_script("build.ps1")
+    assert "--copy" in script
+    assert "--source $PSScriptRoot" in script
+    assert "--destination (Join-Path $stagePackaging \"windows\")" in script
+    assert 'Copy-Item -Path (Join-Path $PSScriptRoot "*")' not in script
+
+
+def test_release_verify_contract_scans_extracted_tree_for_forbidden_entries():
+    # The release verify step smokes each extracted payload AND scans the whole
+    # extracted archive for forbidden entries (--check-tree), so a packaging-
+    # layer leftover can never slip past the payload-only clean-install smoke.
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+    assert "win_smoke.py --check (Join-Path $dest \"payload\")" in workflow
+    assert "win_smoke.py --check-tree $dest" in workflow
+    assert workflow.count("win_smoke.py --check-tree") == 1
 
 
 _STRICT_MODE_STRING_PATHS_REASON = (

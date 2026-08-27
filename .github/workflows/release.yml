@@ -309,7 +309,9 @@ jobs:
             }
             python packaging\windows\win_smoke.py --check (Join-Path $dest "payload")
             if ($LASTEXITCODE -ne 0) { throw "clean-install smoke failed for $($zip.Name)" }
-            Write-Host "Verified $($zip.Name) (smoke passed)"
+            python packaging\windows\win_smoke.py --check-tree $dest
+            if ($LASTEXITCODE -ne 0) { throw "forbidden entries in extracted $($zip.Name)" }
+            Write-Host "Verified $($zip.Name) (smoke + tree check passed)"
           }
           Write-Host "Built $($zips[0].Name), $($zips[1].Name), and $($exe.Name)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
