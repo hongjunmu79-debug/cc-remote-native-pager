@@ -20,10 +20,14 @@ from deploy.release_manifest import (
     ReleaseManifestError,
     validate_release_directory,
 )
+from deploy.release_metadata import load_release_metadata
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL_SHA = "0123456789abcdef0123456789abcdef01234567"
+DISTRIBUTION_VERSION = load_release_metadata(
+    ROOT / "deploy" / "release-metadata.json"
+).distribution_version
 
 
 def test_release_workflow_materializes_web_before_python_bundle_tests():
@@ -75,8 +79,8 @@ def _bootstrap_fixture(
     checksum: str | None = None,
     symlink: bool = False,
 ) -> tuple[Path, str]:
-    asset = f"cc-remote-wrapper-v{__version__}-darwin-arm64.tar.gz"
-    prefix = f"cc-remote-wrapper-v{__version__}"
+    asset = f"cc-remote-wrapper-v{DISTRIBUTION_VERSION}-darwin-arm64.tar.gz"
+    prefix = f"cc-remote-wrapper-v{DISTRIBUTION_VERSION}"
     archive_path = directory / asset
     marker = directory / "installer-ran"
     with tarfile.open(archive_path, "w:gz") as archive:
@@ -142,11 +146,11 @@ def test_release_bundles_are_deterministic_and_role_scoped(
     )
 
     assert first.name == (
-        f"cc-remote-{role}-v{__version__}-{system}-{machine}.tar.gz"
+        f"cc-remote-{role}-v{DISTRIBUTION_VERSION}-{system}-{machine}.tar.gz"
     )
     assert _digest(first) == _digest(second)
 
-    prefix = f"cc-remote-{role}-v{__version__}"
+    prefix = f"cc-remote-{role}-v{DISTRIBUTION_VERSION}"
     members = _members(first)
     assert f"{prefix}/release-manifest.json" in members
     assert f"{prefix}/bin/uv" in members
@@ -175,6 +179,7 @@ def test_release_bundles_are_deterministic_and_role_scoped(
     assert manifest == {
         "schema": 1,
         "product_version": __version__,
+        "distribution_version": DISTRIBUTION_VERSION,
         "protocol_version": PROTOCOL_VERSION,
         "git_sha": FULL_SHA,
         "role": role,
@@ -351,7 +356,7 @@ def test_release_manifest_and_atomic_switch_fail_closed(tmp_path: Path):
     extracted = tmp_path / "extracted"
     with tarfile.open(bundle, "r:gz") as archive:
         archive.extractall(extracted, filter="data")
-    root = extracted / f"cc-remote-wrapper-v{__version__}"
+    root = extracted / f"cc-remote-wrapper-v{DISTRIBUTION_VERSION}"
     manifest = json.loads((root / "release-manifest.json").read_text())
     manifest["protocol_version"] += 1
     (root / "release-manifest.json").write_text(json.dumps(manifest))
@@ -438,7 +443,18 @@ def test_role_locks_and_release_workflow_are_versioned_inputs():
     assert "actions/attest" in workflow
     assert "gh release upload" in workflow
     uv_version = (ROOT / "deploy" / "uv-version.txt").read_text().strip()
-    assert workflow.count(f'version: "{uv_version}"') == 2
+    for workflow_name in (
+        ".github/workflows/release.yml",
+        ".github/workflows/ci.yml",
+    ):
+        text = (ROOT / workflow_name).read_text(encoding="utf-8")
+        setup_uv_steps = text.count("uses: astral-sh/setup-uv@")
+        pinned = text.count(f'version: "{uv_version}"')
+        assert setup_uv_steps == pinned, (
+            f"{workflow_name}: every setup-uv step must pin "
+            f"version {uv_version!r} from deploy/uv-version.txt"
+        )
+        assert setup_uv_steps >= 1
     python_version = (
         ROOT / "deploy" / "python-version.txt"
     ).read_text().strip()

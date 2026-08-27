@@ -3,12 +3,17 @@
 ## Release inputs
 
 - Android application ID: `dev.ccremote.lan`
-- Default origin: `http://192.168.3.4:8766/`
+- Distribution version: `3.0.0-pager.5` (version code `30014`)
 - cc-remote product version: `3.0.0`
 - cc-remote protocol: `19`
 - Native bridge: `1`
 - Minimum Android: 8.0 (API 26)
 - Target Android: API 36
+
+There is no built-in default server endpoint. The first launch shows a
+server-entry screen; the user supplies an HTTPS root origin or a private/local
+cleartext HTTP origin. The canonical values live in
+`deploy/release-metadata.json` and are consumed by the Gradle build and CI.
 
 The web bundle and APK are one release unit. Deploying only the APK leaves the
 chat client usable but the native dashboard has no state source. Deploying only
@@ -34,7 +39,7 @@ release build fails if a configured signing file is missing or incomplete.
 ## Web deployment
 
 1. Confirm `web/dist/cc-remote-build.json` reports version `3.0.0` and protocol
-   `19`.
+   `19`, and that `deploy/release-metadata.json` matches the tag.
 2. Copy `web/dist` to a staging directory beside the live static directory.
 3. Rename the live directory to a timestamped backup.
 4. Rename staging to the live `dist` path.
@@ -56,7 +61,7 @@ Install with Android's package installer, or with ADB when the device is
 connected:
 
 ```powershell
-adb install -r CC-Remote-Native-Pager-v3.0.0-pager.1.apk
+adb install -r CC-Remote-Native-Pager-v3.0.0-pager.5.apk
 ```
 
 ## Rollback

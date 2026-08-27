@@ -7,13 +7,16 @@ from pathlib import Path
 from cc_remote import __version__
 from cc_remote.protocol import PROTOCOL_VERSION
 from cc_remote.wrapper.codex_handle import _initialize_params
+from deploy.release_metadata import load_release_metadata
 
 
 ROOT = Path(__file__).resolve().parents[1]
+METADATA = load_release_metadata(ROOT / "deploy" / "release-metadata.json")
 
 
 def test_v3_product_version_is_consistent_across_runtime_and_web_metadata():
     assert __version__ == "3.0.0"
+    assert METADATA.product_version == __version__
     assert re.fullmatch(r"[1-9]\d*\.\d+\.\d+", __version__)
 
     package = json.loads((ROOT / "web/package.json").read_text())
@@ -31,7 +34,24 @@ def test_v3_product_version_is_consistent_across_runtime_and_web_metadata():
     }
     assert _initialize_params()["clientInfo"]["version"] == __version__
     installer = (ROOT / "deploy/install.sh").read_text()
-    assert f'VERSION="${{CC_REMOTE_VERSION:-{__version__}}}"' in installer
+    assert (
+        f'VERSION="${{CC_REMOTE_VERSION:-{METADATA.distribution_version}}}"'
+        in installer
+    )
+    assert (
+        f'REPOSITORY="${{CC_REMOTE_GITHUB_REPOSITORY:-{METADATA.repository.slug}}}"'
+        in installer
+    )
+
+
+def test_canonical_release_metadata_defines_the_pager_distribution():
+    assert METADATA.distribution_version == "3.0.0-pager.5"
+    assert METADATA.protocol == PROTOCOL_VERSION == 19
+    assert METADATA.android.application_id == "dev.ccremote.lan"
+    assert METADATA.android.version_code == 30014
+    assert METADATA.android.version_name == METADATA.distribution_version
+    assert METADATA.repository.slug == "hongjunmu79-debug/cc-remote-native-pager"
+    assert METADATA.release_tag == "v3.0.0-pager.5"
 
 
 def test_release_docs_distinguish_product_and_wire_protocol_versions():
@@ -46,6 +66,8 @@ def test_release_docs_distinguish_product_and_wire_protocol_versions():
     for document in (readme, readme_en, changelog):
         assert "v3.0.0" in document
         assert "protocol v19" in document.lower()
+    assert METADATA.distribution_version in readme
+    assert METADATA.distribution_version in readme_en
 
 
 def test_readmes_use_safe_markdown_for_navigation_and_images():
@@ -60,3 +82,14 @@ def test_readmes_use_safe_markdown_for_navigation_and_images():
 
     assert "[English](README_en.md)" in readme
     assert "[中文](README.md)" in readme_en
+
+
+def test_readmes_reference_the_real_repository_and_distribution_release():
+    for document_name in ("README.md", "README_en.md"):
+        document = (ROOT / document_name).read_text()
+        assert f"github.com/{METADATA.repository.slug}" in document
+        assert (
+            f"github.com/{METADATA.repository.slug}/releases/download/"
+            f"{METADATA.release_tag}"
+        ) in document
+        assert "muggle-stack/cc-remote" not in document

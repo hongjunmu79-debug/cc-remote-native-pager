@@ -9,10 +9,11 @@ WebSocket transport, replay cursors, session history, and command delivery.
 ## Context
 
 The deployed Windows cc-remote instance is v3.0.0 on wire protocol v19. Its
-Android package is currently a machine-specific WebView shell fixed to the LAN
-origin `http://192.168.3.4:8766`. Reimplementing protocol v19 in Kotlin would
-create a second state machine for login cookies, generations, replay, focus,
-and the reliable command outbox.
+Android package is a generic WebView shell: the user enters the relay origin on
+first launch (any HTTPS root origin, or a private/local cleartext HTTP origin
+after a visible warning). Reimplementing protocol v19 in Kotlin would create a
+second state machine for login cookies, generations, replay, focus, and the
+reliable command outbox.
 
 ## Decision
 

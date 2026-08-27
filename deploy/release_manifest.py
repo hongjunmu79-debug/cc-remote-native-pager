@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 """Validate a role-scoped cc-remote release directory without importing it."""
+# ruff: noqa: E402  # the sys.path bootstrap below must run before `deploy` imports
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 import subprocess
 from typing import Any
+
+# Make the repo root importable so this module works both as a script and as a
+# package member (``python -m deploy.release_manifest``). Script invocation
+# sets sys.path[0] to deploy/, which does not contain the ``deploy`` package
+# itself.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from deploy.validate_protocol_bundle import (
     ProtocolBundleError,
@@ -25,9 +35,14 @@ _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ROLES = {"relay", "wrapper"}
 _SYSTEMS = {"linux", "darwin"}
 _ARCHES = {"x86_64", "arm64"}
+_DISTRIBUTION_VERSION_RE = re.compile(
+    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z.-]+)?$"
+)
 _KEYS = {
     "schema",
     "product_version",
+    "distribution_version",
     "protocol_version",
     "git_sha",
     "role",
@@ -55,6 +70,12 @@ def load_manifest(path: Path) -> dict[str, Any]:
         raise ReleaseManifestError("release manifest has an invalid architecture")
     if value["role"] == "relay" and value["os"] != "linux":
         raise ReleaseManifestError("relay bundles only support linux")
+    if not isinstance(value["distribution_version"], str) or not re.fullmatch(
+        r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+        r"(?:-[0-9A-Za-z.-]+)?$",
+        value["distribution_version"],
+    ):
+        raise ReleaseManifestError("release manifest has an invalid distribution version")
     if not isinstance(value["git_sha"], str) or not _SHA_RE.fullmatch(
         value["git_sha"]
     ):

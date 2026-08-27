@@ -138,7 +138,7 @@ def test_session_state_filename_is_utf8_safe_and_state_read_is_bounded(tmp_path)
 
 
 def test_windows_session_state_path_stays_inside_sessions_directory(tmp_path):
-    cwd = r"C:\Users\23715\Documents\Codex\project"
+    cwd = r"C:\Users\alice\Documents\project"
     path = _session_file(tmp_path, cwd)
 
     assert path.parent == tmp_path / "sessions"

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build deterministic, role-scoped cc-remote release archives."""
+# ruff: noqa: E402  # the sys.path bootstrap below must run before `deploy` imports
 from __future__ import annotations
 
 import argparse
@@ -10,10 +11,22 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 
+# Make the repo root importable so this module works both as a script and as a
+# package member (``python -m deploy.build_release``). Script invocation sets
+# sys.path[0] to deploy/, which does not contain the ``deploy`` package itself.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from deploy.release_manifest import validate_release_directory
+from deploy.release_metadata import (
+    ReleaseMetadataError,
+    load_release_metadata,
+)
 from deploy.validate_protocol_bundle import (
     ProtocolBundleError,
     backend_product_version,
@@ -203,6 +216,20 @@ def build_bundle(
         protocol_version = backend_protocol(protocol_path)
     except ProtocolBundleError as exc:
         raise BuildError(str(exc)) from exc
+    metadata_path = root / "deploy" / "release-metadata.json"
+    try:
+        release_metadata = load_release_metadata(metadata_path)
+    except ReleaseMetadataError as exc:
+        raise BuildError(str(exc)) from exc
+    if release_metadata.product_version != product_version:
+        raise BuildError(
+            "canonical release metadata product version does not match backend"
+        )
+    if release_metadata.protocol != protocol_version:
+        raise BuildError(
+            "canonical release metadata protocol does not match backend"
+        )
+    distribution_version = release_metadata.distribution_version
     if role == "relay":
         try:
             validate_protocol_bundle(
@@ -215,7 +242,7 @@ def build_bundle(
         if not (root / "web" / "dist" / "index.html").is_file():
             raise BuildError("web/dist is missing; build the web client first")
 
-    prefix = f"cc-remote-{role}-v{product_version}"
+    prefix = f"cc-remote-{role}-v{distribution_version}"
     name = f"{prefix}-{system}-{machine}.tar.gz"
     output = output_dir.resolve() / name
     with tempfile.TemporaryDirectory(prefix="cc-remote-release-") as temporary:
@@ -243,6 +270,7 @@ def build_bundle(
         manifest = {
             "schema": 1,
             "product_version": product_version,
+            "distribution_version": distribution_version,
             "protocol_version": protocol_version,
             "git_sha": git_sha,
             "role": role,
