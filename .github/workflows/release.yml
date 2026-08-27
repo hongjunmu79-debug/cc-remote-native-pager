@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+      - "v*.*.*-*"   # distribution tags such as v3.0.0-pager.5
 
 concurrency:
   group: release-${{ github.ref }}
@@ -16,13 +17,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
           cache: npm
@@ -31,7 +32,9 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.16"
-      - name: Verify tag and product versions
+      - name: Validate canonical release metadata
+        run: python deploy/validate_release_metadata.py --root .
+      - name: Verify tag, product, and distribution versions
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -41,10 +44,16 @@ jobs:
           from pathlib import Path
           from cc_remote import __version__
 
-          expected = f"v{__version__}"
-          if os.environ["RELEASE_TAG"] != expected:
+          tag = os.environ["RELEASE_TAG"]
+          metadata = json.loads(Path("deploy/release-metadata.json").read_text())
+          expected_tags = {
+              f"v{__version__}",
+              f"v{metadata['product_version']}",
+              f"v{metadata['distribution_version']}",
+          }
+          if tag not in expected_tags:
               raise SystemExit(
-                  f"release tag {os.environ['RELEASE_TAG']!r} != {expected!r}"
+                  f"release tag {tag!r} not in allowed set {sorted(expected_tags)!r}"
               )
           package = json.loads(Path("web/package.json").read_text())
           lock = json.loads(Path("web/package-lock.json").read_text())
@@ -52,6 +61,10 @@ jobs:
               raise SystemExit("web/package.json version does not match backend")
           if lock["version"] != __version__:
               raise SystemExit("web/package-lock.json version does not match backend")
+          if metadata["product_version"] != __version__:
+              raise SystemExit(
+                  "deploy/release-metadata.json product_version does not match backend"
+              )
           PY
       - name: Install Python test dependencies
         run: |
@@ -129,10 +142,10 @@ jobs:
             expected_uname: arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
       - name: Install uv
@@ -145,7 +158,7 @@ jobs:
         run: test "$(uname -m)" = "$EXPECTED_UNAME"
       - name: Build Relay web client
         if: matrix.role == 'relay'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
           cache: npm
@@ -206,28 +219,144 @@ jobs:
             fi
           )
           rm -rf -- "$smoke"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bundle-${{ matrix.role }}-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
+  # Source-built Windows distribution: web/dist is built from this checkout,
+  # the archive is assembled by packaging\windows\build.ps1 (deterministic zip,
+  # payload manifest, smoke suite, SHA-256), and both the archive and its
+  # checksum are uploaded. No node LAN proxy, no shipped .venv.
+  build-windows:
+    name: Build Windows distribution
+    needs: verify
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install uv (pinned; must match deploy/uv-version.txt)
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+      - name: Materialize the Web client
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+      - name: Build the deterministic Windows archive
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          $epoch = (git show -s --format=%ct $env:GITHUB_SHA)
+          $uvExe = (Get-Command uv).Source
+          if (-not $uvExe) { throw "uv not found on PATH" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          powershell -NoProfile -ExecutionPolicy Bypass -File `
+            packaging\windows\build.ps1 `
+            -SourceRoot . -OutputDir dist -UvExe $uvExe `
+            -GitSha $env:GIT_SHA -SourceDateEpoch $epoch
+      - name: Verify archive and checksum exist
+        shell: powershell
+        run: |
+          $zip = Get-ChildItem dist\cc-remote-*.zip | Select-Object -First 1
+          $sha = Get-ChildItem dist\cc-remote-*.zip.sha256 | Select-Object -First 1
+          if (-not $zip -or -not $sha) { throw "archive or checksum missing" }
+          Write-Host "Built $($zip.Name) ($($zip.Length) bytes)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-dist
+          path: dist/cc-remote-*
+          if-no-files-found: error
+          retention-days: 7
+
+  # Source-built Android pager APK. Unit tests + lint must pass before the
+  # release APK is assembled. When PAGER_KEYSTORE_B64 and
+  # PAGER_SIGNING_PROPERTIES secrets are present, assembleRelease produces a
+  # signed APK; otherwise it assembles an unsigned release APK (CI gate only —
+  # a publish without signing secrets should not happen for real releases).
+  build-android:
+    name: Build Android pager APK
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Unit tests
+        working-directory: android-native
+        run: ./gradlew testDebugUnitTest
+      - name: Lint
+        working-directory: android-native
+        run: ./gradlew lintDebug
+      - name: Configure release signing from secrets
+        if: ${{ secrets.PAGER_KEYSTORE_B64 != '' && secrets.PAGER_SIGNING_PROPERTIES != '' }}
+        shell: bash
+        env:
+          PAGER_KEYSTORE_B64: ${{ secrets.PAGER_KEYSTORE_B64 }}
+          PAGER_SIGNING_PROPERTIES: ${{ secrets.PAGER_SIGNING_PROPERTIES }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pager-keys"
+          printf '%s' "$PAGER_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/pager-keys/pager.keystore"
+          # storeFile in the properties is relative to the properties file's
+          # directory, so co-locate the keystore and the properties file.
+          printf '%s\n' "$PAGER_SIGNING_PROPERTIES" > "$RUNNER_TEMP/pager-keys/signing.properties"
+          echo "PAGER_SIGNING_PROPERTIES=$RUNNER_TEMP/pager-keys/signing.properties" >> "$GITHUB_ENV"
+      - name: Assemble release APK
+        working-directory: android-native
+        run: ./gradlew assembleRelease
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-apk
+          path: android-native/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Attest and publish GitHub Release
-    needs: build
+    # All build gates must pass; a failure in any of them blocks publication.
+    needs: [build, build-windows, build-android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: bundle-*
+          pattern: "bundle-*"
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: "windows-dist"
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: "android-apk"
           path: dist
           merge-multiple: true
       - name: Assemble checksummed release assets
@@ -236,12 +365,20 @@ jobs:
           chmod 0755 dist/install.sh
           (
             cd dist
-            printf '%s\n' cc-remote-*.tar.gz install.sh |
+            printf '%s\n' \
+              cc-remote-*.tar.gz \
+              cc-remote-*.zip \
+              cc-remote-*.zip.sha256 \
+              *.apk \
+              install.sh |
               sort | xargs sha256sum > SHA256SUMS
           )
           test "$(find dist -name 'cc-remote-*.tar.gz' | wc -l)" -eq 6
+          test "$(find dist -name 'cc-remote-*.zip' | wc -l)" -eq 1
+          test "$(find dist -name '*.apk' | wc -l)" -ge 1
+          ls -1 dist
       - name: Attest release assets
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: "dist/*"
       - name: Create draft, upload assets, and publish
