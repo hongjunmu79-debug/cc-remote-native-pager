@@ -2,9 +2,17 @@ name: Release
 
 on:
   push:
+    # Only pre-release-shaped tags (v3.0.0-pager.5) trigger the workflow at
+    # all. The bare product tag (v3.0.0) must never become a release, so it is
+    # not even a trigger pattern; the verify job then enforces the exact
+    # canonical distribution tag from deploy/release-metadata.json.
     tags:
-      - "v*.*.*"
       - "v*.*.*-*"   # distribution tags such as v3.0.0-pager.5
+  # Safe validation path: a maintainer may trigger verify + every build gate
+  # without publishing. Publication stays tag-only; the build jobs skip the
+  # fail-closed signing check and the verify job skips the tag-contract check
+  # on a manual run.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -34,7 +42,10 @@ jobs:
           version: "0.11.16"
       - name: Validate canonical release metadata
         run: python deploy/validate_release_metadata.py --root .
-      - name: Verify tag, product, and distribution versions
+      - name: Verify tag matches the canonical distribution tag
+        # Manual (workflow_dispatch) runs have no release tag and are pure
+        # build validation; only a real tag push must satisfy the contract.
+        if: github.event_name == 'push'
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -43,24 +54,22 @@ jobs:
           import os
           from pathlib import Path
           from cc_remote import __version__
+          from deploy.tag_contract import verify_release_tag
 
           tag = os.environ["RELEASE_TAG"]
-          metadata = json.loads(Path("deploy/release-metadata.json").read_text())
-          expected_tags = {
-              f"v{__version__}",
-              f"v{metadata['product_version']}",
-              f"v{metadata['distribution_version']}",
-          }
-          if tag not in expected_tags:
-              raise SystemExit(
-                  f"release tag {tag!r} not in allowed set {sorted(expected_tags)!r}"
-              )
+          # Only the canonical distribution tag is a release. The bare product
+          # tag (v3.0.0) is deliberately not accepted: a release must line up
+          # with the distribution version, version_name, and the signer. The
+          # check lives in deploy/tag_contract.py so the acceptance tests run
+          # the exact code the workflow runs.
+          verify_release_tag(tag, Path("."))
           package = json.loads(Path("web/package.json").read_text())
           lock = json.loads(Path("web/package-lock.json").read_text())
           if package["version"] != __version__:
               raise SystemExit("web/package.json version does not match backend")
           if lock["version"] != __version__:
               raise SystemExit("web/package-lock.json version does not match backend")
+          metadata = json.loads(Path("deploy/release-metadata.json").read_text())
           if metadata["product_version"] != __version__:
               raise SystemExit(
                   "deploy/release-metadata.json product_version does not match backend"
@@ -256,7 +265,13 @@ jobs:
         run: |
           npm --prefix web ci
           npm --prefix web run build
-      - name: Build the deterministic Windows archive
+      - name: Install Inno Setup compiler (ISCC)
+        # The installer executable is a first-class release artifact: the build
+        # must fail (never silently skip) when ISCC is unavailable. Chocolatey
+        # is preinstalled on the windows-2025 runner image; build-installer.ps1
+        # finds ISCC.exe at the standard per-machine install path.
+        run: choco install innosetup -y --no-progress
+      - name: Build the three Windows artifacts
         env:
           GIT_SHA: ${{ github.sha }}
         run: |
@@ -268,13 +283,29 @@ jobs:
             packaging\windows\build.ps1 `
             -SourceRoot . -OutputDir dist -UvExe $uvExe `
             -GitSha $env:GIT_SHA -SourceDateEpoch $epoch
-      - name: Verify archive and checksum exist
+      - name: Verify all three artifacts and smoke-check the archives
         shell: powershell
         run: |
-          $zip = Get-ChildItem dist\cc-remote-*.zip | Select-Object -First 1
-          $sha = Get-ChildItem dist\cc-remote-*.zip.sha256 | Select-Object -First 1
-          if (-not $zip -or -not $sha) { throw "archive or checksum missing" }
-          Write-Host "Built $($zip.Name) ($($zip.Length) bytes)"
+          $zips = @(Get-ChildItem dist\cc-remote-*.zip)
+          $zipShas = @(Get-ChildItem dist\cc-remote-*.zip.sha256)
+          $exe = Get-ChildItem dist\cc-remote-*-setup.exe
+          $exeSha = Get-ChildItem dist\cc-remote-*-setup.exe.sha256
+          if ($zips.Count -ne 2) { throw "expected 2 zip artifacts (installer + portable), found $($zips.Count)" }
+          if ($zipShas.Count -ne 2) { throw "expected 2 zip checksums, found $($zipShas.Count)" }
+          if (-not $exe -or -not $exeSha) { throw "installer exe or its checksum is missing" }
+          foreach ($zip in $zips) {
+            $dest = Join-Path $env:RUNNER_TEMP ("verify-" + $zip.BaseName)
+            Expand-Archive -Path $zip.FullName -DestinationPath $dest
+            if ($zip.Name -like "*portable*") {
+              if (-not (Test-Path (Join-Path $dest "start-portable.ps1"))) { throw "portable zip is missing start-portable.ps1" }
+            } else {
+              if (-not (Test-Path (Join-Path $dest "setup.ps1"))) { throw "installer zip is missing setup.ps1" }
+            }
+            python packaging\windows\win_smoke.py --check (Join-Path $dest "payload")
+            if ($LASTEXITCODE -ne 0) { throw "clean-install smoke failed for $($zip.Name)" }
+            Write-Host "Verified $($zip.Name) (smoke passed)"
+          }
+          Write-Host "Built $($zips[0].Name), $($zips[1].Name), and $($exe.Name)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-dist
@@ -283,10 +314,12 @@ jobs:
           retention-days: 7
 
   # Source-built Android pager APK. Unit tests + lint must pass before the
-  # release APK is assembled. When PAGER_KEYSTORE_B64 and
-  # PAGER_SIGNING_PROPERTIES secrets are present, assembleRelease produces a
-  # signed APK; otherwise it assembles an unsigned release APK (CI gate only —
-  # a publish without signing secrets should not happen for real releases).
+  # release APK is assembled. Distribution (tag push) builds are FAIL-CLOSED:
+  # PAGER_KEYSTORE_B64 and PAGER_SIGNING_PROPERTIES must both be present, the
+  # assembled APK must be signed, and its signer certificate SHA-256 must equal
+  # android.signer_sha256 from deploy/release-metadata.json — otherwise the job
+  # fails and publish is impossible. Manual (workflow_dispatch) runs build an
+  # unsigned APK for validation only; publish never runs for them.
   build-android:
     name: Build Android pager APK
     needs: verify
@@ -297,7 +330,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
@@ -310,17 +343,22 @@ jobs:
       - name: Configure release signing from secrets
         shell: bash
         env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           PAGER_KEYSTORE_B64: ${{ secrets.PAGER_KEYSTORE_B64 }}
           PAGER_SIGNING_PROPERTIES: ${{ secrets.PAGER_SIGNING_PROPERTIES }}
         run: |
           set -euo pipefail
           # The `secrets` context is not available in `if:` conditions, so this
-          # step always runs and the shell decides. An absent secret resolves
-          # to the empty string; when either secret is missing we build an
-          # unsigned release APK (CI gate only) and leave PAGER_SIGNING_PROPERTIES
-          # unset so Gradle does not try to configure a signing config.
+          # step always runs and the shell decides. A tag push is fail-closed:
+          # missing signing material stops the build before an unsigned APK can
+          # be produced. A manual (workflow_dispatch) validation build has no
+          # publish path, so it may assemble an unsigned APK.
           if [ -z "$PAGER_KEYSTORE_B64" ] || [ -z "$PAGER_SIGNING_PROPERTIES" ]; then
-            echo "release signing secrets are not configured; building an unsigned release APK"
+            if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              echo "release signing secrets are not configured; refusing to build an unsigned release APK" >&2
+              exit 1
+            fi
+            echo "no signing secrets on a non-tag build; assembling an unsigned release APK for validation"
             exit 0
           fi
           mkdir -p "$RUNNER_TEMP/pager-keys"
@@ -332,6 +370,40 @@ jobs:
       - name: Assemble release APK
         working-directory: android-native
         run: ./gradlew assembleRelease
+      - name: Verify release APK signer fingerprint
+        # Tag pushes must carry exactly the canonical signer; a manual
+        # validation build is unsigned and has no publish path, so it is
+        # verified only when a release could actually be published.
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(python -c "import json;print(json.load(open('deploy/release-metadata.json'))['android']['signer_sha256'])")"
+          apk="$(ls android-native/app/build/outputs/apk/release/*.apk 2>/dev/null | head -n1)"
+          if [ -z "$apk" ]; then
+            echo "no release APK produced; cannot verify the signer" >&2
+            exit 1
+          fi
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$sdk_root" ]; then
+            echo "ANDROID_HOME/ANDROID_SDK_ROOT is not set; cannot locate apksigner" >&2
+            exit 1
+          fi
+          apksigner="$(find "$sdk_root/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -n1)"
+          if [ -z "$apksigner" ]; then
+            echo "apksigner not found under $sdk_root/build-tools" >&2
+            exit 1
+          fi
+          digest="$("$apksigner" verify --print-certs "$apk" 2>/dev/null | grep -oE 'SHA-256 digest: [0-9a-f]{64}' | awk '{print $3}' | head -n1)"
+          if [ -z "$digest" ]; then
+            echo "APK has no signer certificate (unsigned APK); refusing to upload" >&2
+            exit 1
+          fi
+          if [ "$digest" != "$expected" ]; then
+            echo "APK signer SHA-256 $digest does not equal the canonical signer $expected" >&2
+            exit 1
+          fi
+          echo "verified release APK signer SHA-256 $digest"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: android-apk
@@ -342,6 +414,9 @@ jobs:
   publish:
     name: Attest and publish GitHub Release
     # All build gates must pass; a failure in any of them blocks publication.
+    # Publication is tag-push-only: a manual (workflow_dispatch) run exercises
+    # the full build gate without ever creating or uploading a release.
+    if: github.event_name == 'push'
     needs: [build, build-windows, build-android]
     runs-on: ubuntu-24.04
     permissions:
@@ -377,12 +452,15 @@ jobs:
               cc-remote-*.tar.gz \
               cc-remote-*.zip \
               cc-remote-*.zip.sha256 \
+              cc-remote-*.exe \
+              cc-remote-*.exe.sha256 \
               *.apk \
               install.sh |
               sort | xargs sha256sum > SHA256SUMS
           )
           test "$(find dist -name 'cc-remote-*.tar.gz' | wc -l)" -eq 6
-          test "$(find dist -name 'cc-remote-*.zip' | wc -l)" -eq 1
+          test "$(find dist -name 'cc-remote-*.zip' | wc -l)" -eq 2
+          test "$(find dist -name 'cc-remote-*.exe' | wc -l)" -eq 1
           test "$(find dist -name '*.apk' | wc -l)" -ge 1
           ls -1 dist
       - name: Attest release assets

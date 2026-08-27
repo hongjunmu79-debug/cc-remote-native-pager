@@ -72,11 +72,14 @@ jobs:
       - name: Git hygiene
         run: git diff --check
 
-  # The Windows distribution tests run on a Windows runner. They only need
-  # pytest + stdlib: the packaging modules (win_config/win_layout/win_manifest/
-  # win_smoke/win_build) are deliberately dependency-free.
+  # Windows runs the production-relevant distribution tests: the packaging /
+  # install / rollback / dual-process smoke suite, the Windows import-compat
+  # contract, the canonical release-metadata contract, and the release-workflow
+  # contracts (fail-closed signing, signer SHA-256, distribution-tag-only
+  # publication, immutable action pins). POSIX-only release tests (chmod,
+  # symlinks, atomic-rename, shell installers) deliberately run on Ubuntu only.
   python-windows:
-    name: Windows distribution tests
+    name: Windows distribution + release-contract tests
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -85,10 +88,25 @@ jobs:
           python-version: "3.11"
       - name: Install pytest
         run: python -m pip install pytest
-      - name: Run packaging tests
+      - name: Run packaging, lifecycle, and release-contract tests
         env:
           PYTHONUTF8: "1"
-        run: python -m pytest tests/test_windows_packaging.py -q
+        run: |
+          python -m pytest `
+            tests/test_windows_packaging.py `
+            tests/test_windows_import_compat.py `
+            tests/test_release_metadata.py `
+            tests/test_release_distribution.py::test_release_workflow_materializes_web_before_python_bundle_tests `
+            tests/test_release_distribution.py::test_ci_python_job_materializes_web_before_python_tests `
+            tests/test_release_distribution.py::test_workflow_if_conditions_never_reference_secrets `
+            tests/test_release_distribution.py::test_role_installers_avoid_ambiguous_and_or_guards `
+            tests/test_release_distribution.py::test_role_locks_and_release_workflow_are_versioned_inputs `
+            tests/test_release_distribution.py::test_release_locks_keep_intel_macos_cryptography_wheel `
+            tests/test_release_distribution.py::test_release_metadata_android_signer_sha256_is_validated `
+            tests/test_release_distribution.py::test_release_tag_contract_accepts_only_canonical_distribution_tag `
+            tests/test_release_distribution.py::test_release_workflow_android_signing_is_fail_closed `
+            tests/test_release_distribution.py::test_release_workflow_publish_is_tag_push_only `
+            -q
 
   web:
     name: Web client (build + reliability + lint)
@@ -110,7 +128,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
@@ -120,3 +138,8 @@ jobs:
       - name: Lint
         working-directory: android-native
         run: ./gradlew lintDebug
+      - name: Release build validation
+        # Assemble the release APK unsigned (no signing secrets on a push/PR
+        # gate) so lint + R8/minify + packaging are exercised on every commit.
+        working-directory: android-native
+        run: ./gradlew assembleRelease
