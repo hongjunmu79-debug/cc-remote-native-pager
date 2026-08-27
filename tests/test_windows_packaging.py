@@ -912,6 +912,53 @@ def test_build_ps1_produces_three_artifacts():
     assert "build-installer.ps1" in script
 
 
+_STRICT_MODE_STRING_PATHS_REASON = (
+    "Set-StrictMode string-path .Name access is a Windows PowerShell behavior; "
+    "exercised on the Windows CI runner and this machine"
+)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("win"), reason=_STRICT_MODE_STRING_PATHS_REASON
+)
+def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
+    # build.ps1 runs under Set-StrictMode -Version 2.0, where `$path.Name` on a
+    # string element of a foreach (the installer/portable archive paths) throws
+    # PropertyNotFoundException — the real windows-2025 runner failed here (run
+    # 33097259865). The loop must use Split-Path -Leaf for both the status line
+    # and the .sha256 sidecar. Assert the script idiom and execute the exact
+    # foreach-under-StrictMode pattern on a real host.
+    script = _repo_packaging_script("build.ps1")
+    assert "Set-StrictMode -Version 2.0" in script
+    assert "$path | Split-Path -Leaf" in script
+    # The buggy interpolation form ($($path.Name)) must be gone; the comment
+    # above the loop may still mention the property name as documentation.
+    assert "$($path.Name)" not in script
+
+    probe = subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "Set-StrictMode -Version 2.0;"
+            "$ErrorActionPreference = 'Stop';"
+            "$paths = @("
+            "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64.zip', "
+            "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64-portable.zip');"
+            "$leaves = foreach ($p in $paths) { $p | Split-Path -Leaf };"
+            "if ($leaves[0] -ne 'cc-remote-v3.0.0-pager.5-windows-x64.zip') "
+            "{ throw 'leaf0 mismatch' };"
+            "if ($leaves[1] -ne "
+            "'cc-remote-v3.0.0-pager.5-windows-x64-portable.zip') "
+            "{ throw 'leaf1 mismatch' };"
+            "Write-Output 'strict-mode split-path ok'",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert "strict-mode split-path ok" in probe.stdout
+
+
 # ---------------------------------------------------------------------------
 # Real dual-process contract test (Windows only; isolated temp install)
 # ---------------------------------------------------------------------------

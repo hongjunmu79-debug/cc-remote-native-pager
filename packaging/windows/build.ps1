@@ -151,12 +151,16 @@ $portableArchivePath = Invoke-ArchiveAssembly -Name $portableArchiveName `
         "--readme", (Join-Path $stagePackaging "windows\README-portable.txt")
     )
 
+# $path here is a plain string (an archive path), and this script runs under
+# Set-StrictMode -Version 2.0, where $path.Name on a string throws
+# PropertyNotFoundException. Use Split-Path -Leaf for the display name and the
+# sha256 sidecar, exactly like the installer .exe block below.
 foreach ($path in @($installerArchivePath, $portableArchivePath)) {
     $sha = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
     $size = (Get-Item $path).Length
-    Write-Step "Built $($path.Name) ($size bytes)"
+    Write-Step "Built $($path | Split-Path -Leaf) ($size bytes)"
     Write-Step "SHA256 $sha"
-    Set-Content -Path "$path.sha256" -Value "$sha  $($path.Name)" -Encoding ascii
+    Set-Content -Path "$path.sha256" -Value "$sha  $($path | Split-Path -Leaf)" -Encoding ascii
 }
 
 # --- Compile the real installer (.exe) with Inno Setup ------------------------
