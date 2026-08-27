@@ -30,14 +30,17 @@ validator.
 
 ## Release tag contract
 
-The release workflow accepts tags in the set `{v<product_version>,
-v<distribution_version>}` — i.e. `v3.0.0` and `v3.0.0-pager.5` are both valid,
-`v9.9.9` is rejected. A tag push of an unlisted version fails the `verify` job
-and cannot publish. The tag must also match `web/package.json`,
-`web/package-lock.json`, and the backend `__version__`.
+The only tag that may publish a release is the canonical distribution tag
+(`v3.0.0-pager.5`, derived from `deploy/release-metadata.json` →
+`distribution_version`). The workflow triggers only on pre-release-shaped tags
+(`v*.*.*-*`) and its `verify` job then rejects anything except the canonical
+distribution tag. The bare product tag `v3.0.0` is **not** a trigger pattern and
+is rejected, so it can never become a release. A tag push of any other version
+fails the `verify` job and cannot publish. The tag must also match
+`web/package.json`, `web/package-lock.json`, and the backend `__version__`.
 
-The canonical distribution tag is `v3.0.0-pager.5`. Use the distribution tag
-for user-facing releases so installers and Android `version_name` line up.
+Use the canonical distribution tag for user-facing releases so installers and
+Android `version_name` line up.
 
 ## Workflows
 
@@ -49,19 +52,20 @@ Windows packaging tests on `windows-2025`, web build/reliability/lint, and
 Android unit tests + lint (JDK 17). All actions are SHA-pinned. A PR that would
 fail a release is caught here first.
 
-### `release.yml` — tag release
+### `release.yml` — tag release and manual validation
 
-Triggered only by tag pushes matching `v*.*.*` or `v*.*.*-*`. Strictly gated:
-`publish` `needs: [build, build-windows, build-android]`, and each build job
-`needs: verify`. **A failure in any gate makes publication impossible.**
+Triggered by pre-release-shaped distribution tag pushes (`v*.*.*-*`), or
+manually via `workflow_dispatch` for a no-publish build validation. Strictly
+gated: `publish` `needs: [build, build-windows, build-android]`, and each build
+job `needs: verify`. **A failure in any gate makes publication impossible.**
 
 | Job | What it does |
 | --- | --- |
 | `verify` | Runs the canonical metadata validator, the tag/version contract check, full Python + web tests/lint, `shellcheck`, `bash -n`, and `git diff --check`. |
 | `build` (matrix) | Builds deterministic Linux/macOS role bundles (`relay`/`wrapper` × `x86_64`/`arm64`) from source with `deploy.build_release`, then installs the bundle into a scratch venv and imports the packaged role. |
 | `build-windows` | Builds the deterministic Windows archive with `packaging\windows\build.ps1` (source-built `web/dist`, no shipped `.venv`, no Node LAN proxy), plus its `.sha256`. |
-| `build-android` | Runs Android unit tests + `lintDebug`, then `assembleRelease`. When the `PAGER_KEYSTORE_B64` and `PAGER_SIGNING_PROPERTIES` secrets are present the APK is signed; otherwise it assembles an unsigned release APK (CI gate only). |
-| `publish` | Downloads all build artifacts, assembles `SHA256SUMS`, runs `actions/attest` for attestations, and creates/uploads/publishes the GitHub Release. Refuses to replace an already-published release. |
+| `build-android` | Runs Android unit tests + `lintDebug`, then `assembleRelease`. A tag push is **fail-closed**: both `PAGER_KEYSTORE_B64` and `PAGER_SIGNING_PROPERTIES` must be present and the assembled APK's signer SHA-256 must equal the canonical fingerprint in `deploy/release-metadata.json`, otherwise the job fails and nothing is published. A manual `workflow_dispatch` run may assemble an unsigned APK for validation only — it has no publish path. |
+| `publish` | Downloads all build artifacts, assembles `SHA256SUMS`, runs `actions/attest` for attestations, and creates/uploads/publishes the GitHub Release. Refuses to replace an already-published release. Runs only on tag pushes. |
 
 ## Building release assets from source
 
@@ -88,14 +92,19 @@ configuration from a properties file whose path is exported as
 > conditions**. Referencing it there makes GitHub fail the whole run at startup
 > with `Unrecognized named-value: 'secrets'` and schedules zero jobs. The
 > signing step always runs and the bash guard decides from the
-> `PAGER_KEYSTORE_B64` / `PAGER_SIGNING_PROPERTIES` environment variables;
-> absent secrets yield an unsigned release APK.
+> `PAGER_KEYSTORE_B64` / `PAGER_SIGNING_PROPERTIES` environment variables. A tag
+> push with either secret absent **fails the job closed** — an unsigned release
+> APK is never assembled and publication is impossible. Only a manual
+> `workflow_dispatch` validation run may assemble an unsigned APK, and that run
+> has no publish path.
 
 > **External dependency:** the keystore, alias, and passwords are not in this
 > repository and cannot be reconstructed here. They must be provisioned as
 > repository/environment secrets. If that signing material is unavailable to CI,
-> the release publishes an **unsigned** APK and the maintainer must sign locally
-> with the real keystore before distribution — never substitute a different key.
+> a tag release **cannot publish at all** — the job fails closed and nothing is
+> uploaded, so an unsigned APK can never be shipped from a tag push. Provision
+> the secrets first, then push the tag. Manual validation builds are unsigned
+> by design and must never be distributed. Never substitute a different key.
 
 Before distributing an APK, verify with Android SDK `apksigner verify --print-certs`
 that the previous and new APKs have identical signer SHA-256 digests, the

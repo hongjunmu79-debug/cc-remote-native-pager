@@ -1,4 +1,4 @@
-# ACCEPTANCE_FIXES.md — release-hardening rounds 2–3
+# ACCEPTANCE_FIXES.md — release-hardening rounds 2–3, 6
 
 What was fixed in this round, the exact commands used to verify it, and the
 honest limitations of the local verification. Everything here is zero-token
@@ -6,6 +6,88 @@ unless stated otherwise.
 
 Branch: `codex/release-hardening`. No main merge, no tag, no release was
 created by this work.
+
+## Round 6: bundle-root derivation, strict-mode string paths, endpoint canonicalization, stale docs
+
+The failed live release run (GitHub run 33097259865) exposed four concrete
+defects; each is fixed here with a regression test that runs locally.
+
+### 6.1 Linux/macOS smoke: bundle root is the canonical version, not the ref name
+
+`release.yml`'s `build` smoke step addressed the extracted archive root as
+`cc-remote-$RELEASE_ROLE-${GITHUB_REF_NAME}`. On a manual `workflow_dispatch`
+from a slash branch (`codex/release-hardening`) the ref name contains a slash
+and can never be an archive root, so every bundle smoke failed. The step now
+derives the root from `deploy/release-metadata.json`'s `distribution_version`
+with a `v` prefix — the exact prefix `deploy/build_release.py` writes. New
+regression: `test_release_smoke_bundle_root_derives_from_canonical_distribution_version`.
+
+### 6.2 Windows build.ps1: string paths under Set-StrictMode
+
+The sha256 status loop in `packaging\windows\build.ps1` iterated archive paths
+as plain strings but read `$path.Name`, which throws
+`PropertyNotFoundException` under `Set-StrictMode -Version 2.0` on the real
+windows-2025 runner. The loop now uses `Split-Path -Leaf` for both the status
+line and the `.sha256` sidecar, matching the installer `.exe` block. New
+regression: `test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode`
+executes the exact foreach-under-StrictMode idiom on a real host. The pipeline
+still produces exactly 2 ZIPs + 1 genuine Inno `.exe`.
+
+### 6.3 Android ServerEndpoint.parse: port bounds and host canonicalization
+
+`ServerEndpoint.parse` accepted explicit ports outside 1..65535 (including 0
+and 65536/70000) and preserved an uppercase or DNS-trailing-dot host in the
+stored url/origin, so the bridge and `OriginPolicy` disagreed on the exact
+origin. The parser now rejects any explicit port outside 1..65535 (0 included)
+and canonicalizes the host lowercase with the trailing DNS root dot stripped in
+BOTH the url and the origin (shared `canonicalDnsHost` helper), so bridge
+navigation and OriginPolicy enforcement always agree. All existing security
+rejections (public cleartext HTTP, userinfo, query/fragment, non-root paths,
+unsupported schemes) are preserved. New JVM tests cover uppercase hosts,
+trailing dots, explicit default ports, and ports 0 / 65536 / 70000.
+
+### 6.4 Docs: a tag release can never publish an unsigned APK
+
+`docs/release-hardening/RELEASE_MAINTAINER.md` claimed that when signing
+material is unavailable to CI the release publishes an unsigned APK to be
+signed locally. The truth is fail-closed: a tag push without both
+`PAGER_KEYSTORE_B64` and `PAGER_SIGNING_PROPERTIES` stops `build-android`, so an
+unsigned APK is never assembled and publication is impossible. Only a manual
+`workflow_dispatch` validation build may assemble an unsigned APK, and it has
+no publish path. The maintainer guide was corrected along with the adjacent
+stale claims (only the canonical distribution tag may publish; the bare
+`v3.0.0` is not a trigger; `workflow_dispatch` is a no-publish validation path).
+
+### Verification (exact commands and results)
+
+```
+python deploy/validate_release_metadata.py --root .          # PASS — cc-remote 3.0.0 distribution 3.0.0-pager.5 protocol v19 dev.ccremote.lan vc30014
+.venv\Scripts\python.exe -m pytest tests/test_release_distribution.py -q
+# => 12 passed; 11 pre-existing Windows-only POSIX failures (fake-uv exec-bit,
+#    symlink/atomic-rename, WSL bash) that run on Ubuntu CI only
+.venv\Scripts\python.exe -m pytest `
+  tests/test_windows_packaging.py tests/test_release_metadata.py tests/test_windows_import_compat.py -q
+# => 89 passed (incl. the new strict-mode string-path regression)
+.venv\Scripts\python.exe -m pytest <the 11 curated release-contract node IDs> -q
+# => 12 passed (incl. the new bundle-root regression)
+uvx --from ruff==0.15.13 ruff check cc_remote tests deploy   # All checks passed
+git diff --check                                              # clean
+cd android-native && gradlew.bat testDebugUnitTest            # BUILD SUCCESSFUL (JVM unit tests)
+cd android-native && gradlew.bat lintDebug                    # BUILD SUCCESSFUL (Android lint)
+```
+
+### Honest limitations
+
+- The release.yml smoke step itself runs only on a real Linux/macOS Actions
+  runner; the regression test proves the workflow text derives the bundle root
+  from the canonical metadata instead of the ref name.
+- The Windows `build.ps1` archive loop is exercised by the executable
+  strict-mode probe on this machine, but the full three-artifact `build.ps1`
+  run (including the ISCC-compiled `.exe`) still happens on the windows-2025 CI
+  runner; no Inno Setup is installed here.
+- Android unit tests/lint ran on the local JDK 17. No APK was signed or
+  installed; no signing material or secrets were touched, and no machine
+  identity is recorded here.
 
 ## Round 3: the acceptance-run CI failures, fixed
 
