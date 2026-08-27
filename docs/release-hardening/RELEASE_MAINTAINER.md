@@ -173,8 +173,9 @@ provenance. Users verify downloads with `sha256sum -c` / `shasum -a 256 -c`.
 These cannot be verified inside CI and need the parent acceptance owner or a
 maintainer:
 
-- A clean-VM install/upgrade/rollback run of the Windows installer and
-  portable artifacts.
+- A clean-VM install/upgrade/rollback run of all three Windows artifacts: the
+  installer/bootstrap zip, the portable zip, and the genuine Inno Setup
+  installer `.exe`.
 - On-device Android verification (bridge behavior, endpoint entry, IME, WebView
   enforcement) with a real ADB device.
 - Android keystore / signing-password provisioning and a signed-APK verify.

@@ -58,6 +58,27 @@ no publish path. The maintainer guide was corrected along with the adjacent
 stale claims (only the canonical distribution tag may publish; the bare
 `v3.0.0` is not a trigger; `workflow_dispatch` is a no-publish validation path).
 
+### Round 6 follow-up: Windows artifact docs aligned to the CI contract
+
+`docs/release-hardening/RELEASE_MAINTAINER.md` still described a single Windows
+archive and pre-CI Authenticode guidance. It now matches `release.yml` and the
+packaging pipeline:
+
+- **Artifacts** — exactly three Windows release artifacts: the installer/
+  bootstrap zip, the portable zip, and a genuine Inno Setup installer `.exe`,
+  each with its own `.sha256` sidecar, all assembled from one staged,
+  smoke-verified payload; ISCC (Inno Setup) is a hard dependency and the build
+  fails closed without it.
+- **Authenticode** — the genuine Inno Setup `.exe` is the primary signing
+  target; the zips are integrity-protected by their `.sha256` sidecars and
+  release attestations, not by code signing. Script signing is a separately
+  designed step that does not exist yet, so current artifacts ship unsigned.
+- **Checksums/attestations** — the `publish` `SHA256SUMS` list covers the
+  installer `.exe` and its `.sha256` sidecar alongside the zips and their
+  sidecars.
+- **Clean-VM lifecycle scope** — the human-action item now names all three
+  artifacts for the clean-VM install/upgrade/rollback run.
+
 ### Verification (exact commands and results)
 
 ```
