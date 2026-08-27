@@ -70,9 +70,57 @@ received an array as `$path`:
   updated to assert the new idiom (captured build output, scalar guard, braced
   interpolation) and execute the foreach-under-StrictMode pattern on a real
   host.
-- The probe imports `Microsoft.PowerShell.Utility` explicitly so it runs
-  identically on dev machines whose `PSModulePath` shims a copy of the modules
-  and breaks command autoloading; production `build.ps1` needs no such import.
+- The probe hashes with a pure .NET SHA-256 helper rather than `Get-FileHash`:
+  on the hosted windows-2025 runner the pytest-spawned PowerShell process
+  resolves `Microsoft.PowerShell.Utility` to an incomplete module copy that
+  lacks `Get-FileHash` even after an explicit import (see 7.4), so the BCL
+  types — which a `PSModulePath` shim cannot shadow — do the hashing. The
+  `Microsoft.PowerShell.Utility` import is kept only so the remaining Utility
+  cmdlet the probe uses (`Write-Output`) resolves when command autoloading is
+  unreliable. Production `build.ps1` is unchanged.
+
+### 7.4 Follow-up: the probe's `Get-FileHash` failed on the hosted windows-2025 runner
+
+The round-7 HEAD (commit `077f3a7`) was rejected by CI run 33123432637 (Windows
+job 98695733457): 102 tests passed, but
+`test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars` failed.
+The generated PowerShell probe reported
+
+```
+Get-FileHash is not recognized ... at archive-sidecar-probe.ps1 line 52
+```
+
+even though the probe ran `Import-Module Microsoft.PowerShell.Utility
+-ErrorAction Stop` first. The explicit import therefore does NOT make the
+cmdlet available in the pytest-spawned Windows PowerShell process on the
+hosted runner. This invalidated the round-7 assumption that stock
+`windows-2025` is immune to the module-shadowing/autoload problem that the
+codex-runtimes `PSModulePath` shim causes on this dev machine: in both
+environments `Microsoft.PowerShell.Utility` resolves to a copy that lacks
+`Get-FileHash`, so neither autoloading nor the explicit import provides it.
+On this machine the shadowing copy lives at
+`~/.cache/codex-runtimes/.../native/powershell/Modules`, ahead of the system
+module path; the hosted runner shows the same observable behavior.
+
+The probe now computes SHA-256 with BCL types
+(`[System.Security.Cryptography.SHA256]` + `[System.IO.File]`), and the test
+additionally verifies each sidecar's content against Python's independent
+`hashlib` SHA-256 oracle, so a consistently-wrong helper in the probe cannot
+pass its own self-check. All executable checks are preserved: scalar path
+guard, real non-empty zips, expected root entries, exact `.sha256` target
+names and `<sha256>  <leaf>` contents, and the contamination guard. Production
+`build.ps1` was NOT changed — its own `Get-FileHash` resolves correctly in the
+release job; the failure is isolated to the test subprocess environment.
+
+Verification of the follow-up:
+
+```
+.venv\Scripts\python.exe -m pytest `
+  tests/test_windows_packaging.py::test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars `
+  tests/test_windows_packaging.py::test_build_ps1_archive_loop_rejects_contaminated_path_array `
+  tests/test_windows_packaging.py::test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode -q
+# => 3 passed
+```
 
 ### Verification (exact commands and results)
 
@@ -82,7 +130,9 @@ received an array as `$path`:
   tests/test_windows_import_compat.py `
   tests/test_release_metadata.py `
   <the 12 curated test_release_distribution.py node IDs> -q
-# => 103 passed (incl. the three build.ps1 archive-loop regressions)
+# => 103 passed locally (round 7) — CI run 33123432637 then rejected the probe,
+#    so the local pass was necessary but not sufficient; see 7.4 for the
+#    host-independent probe and its re-run result.
 uvx --from ruff==0.15.13 ruff check cc_remote tests deploy   # All checks passed
 git diff --check                                              # clean
 ```
@@ -96,6 +146,9 @@ git diff --check                                              # clean
 - The sidecar hash in the failing run (`ee55585baa…`) proves the archives were
   valid; the defect was confined to the status/hash sidecar loop, and the fix
   preserves the two-zips-plus-exe artifact contract.
+- The round-7 probe itself was environment-dependent (`Get-FileHash`) and CI
+  run 33123432637 proved that out; the follow-up (7.4) made it host-independent
+  without touching production `build.ps1`.
 
 ## Round 6: bundle-root derivation, strict-mode string paths, endpoint canonicalization, stale docs
 

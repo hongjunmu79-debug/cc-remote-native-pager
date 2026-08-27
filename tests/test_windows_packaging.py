@@ -6,6 +6,7 @@ smoke suite against fabricated temp trees.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -1006,11 +1007,28 @@ param(
 )
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
-# Import explicitly rather than rely on command autoloading: some dev machines
-# put a shim copy of the PowerShell modules ahead of the real ones in
-# PSModulePath, which breaks autoloading for Get-FileHash. This probe must run
-# identically on any host (the production build.ps1 needs no such import).
+# Hash with pure .NET types, not Get-FileHash: on some hosts (this machine's
+# codex-runtimes PSModulePath shim and the hosted windows-2025 runner, CI run
+# 33123432637) Microsoft.PowerShell.Utility resolves to an incomplete copy that
+# lacks Get-FileHash even after an explicit Import-Module. BCL types cannot be
+# shadowed by a PSModulePath shim, so the probe runs identically on any host.
+# The import stays so the Utility cmdlets the probe does use (Write-Output)
+# resolve even when command autoloading is unreliable.
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
+
+function Get-Sha256Hex {
+    param([string]$Path)
+    # Lowercase hex, the same format build.ps1 writes into the .sha256 sidecars.
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        $hash = $sha.ComputeHash($bytes)
+    } finally {
+        $sha.Dispose()
+    }
+    return [System.BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
+}
+
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 # Mirror of packaging\windows\build.ps1's Invoke-ArchiveAssembly: win_build.py
@@ -1044,7 +1062,7 @@ if (@($portableArchivePath).Count -ne 1) { throw "portable path is not a scalar 
 foreach ($path in @($installerArchivePath, $portableArchivePath)) {
     if ($path -isnot [string]) { throw "archive path is not a scalar string: $path" }
     $leaf = Split-Path -Leaf $path
-    $sha = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+    $sha = Get-Sha256Hex $path
     $size = (Get-Item $path).Length
     if ($size -lt 1) { throw "archive is not a real file: $leaf" }
     Set-Content -Path "${path}.sha256" -Value "$sha  $leaf" -Encoding ascii
@@ -1055,7 +1073,7 @@ foreach ($path in @($installerArchivePath, $portableArchivePath)) {
     $leaf = Split-Path -Leaf $path
     $sidecar = "${path}.sha256"
     if (-not (Test-Path $sidecar)) { throw "missing sidecar for $leaf" }
-    $expectedSha = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+    $expectedSha = Get-Sha256Hex $path
     $content = (Get-Content -Path $sidecar -Raw).Trim()
     if ($content -ne "$expectedSha  $leaf") { throw "sidecar content mismatch for ${leaf}: [$content]" }
     $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
@@ -1113,7 +1131,13 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
         "cc-remote-v3.0.0-pager.5-windows-x64.zip",
     ]
     for zip_name in zips:
-        assert (output_dir / f"{zip_name}.sha256").is_file()
+        sidecar = output_dir / f"{zip_name}.sha256"
+        assert sidecar.is_file()
+        # Exact sidecar contract, verified from Python's independent SHA-256
+        # oracle: a consistently-wrong hash helper in the probe cannot pass its
+        # own self-check, and the leaf/two-space format must match exactly.
+        expected = hashlib.sha256((output_dir / zip_name).read_bytes()).hexdigest()
+        assert sidecar.read_text(encoding="ascii").strip() == f"{expected}  {zip_name}"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("win"), reason=_STRICT_MODE_STRING_PATHS_REASON)
