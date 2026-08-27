@@ -2,6 +2,45 @@
 
 [English](CHANGELOG.md)
 
+## v3.0.0-pager.5 — 2026-08-27
+
+面向原生 pager 发行线的生产发布加固，基于 cc-remote 产品 v3.0.0 / wire
+protocol v19。**不涉及 wire protocol 变更。**
+
+### 发布元数据与仓库身份
+
+- 新增 `deploy/release-metadata.json` 作为唯一权威来源：产品版本 `3.0.0`、
+  发行版 `3.0.0-pager.5`、协议 `19`、Android version code `30014`、
+  应用 id `dev.ccremote.lan`、公开仓库身份。
+- 修正 clone/release URL 与 `install.sh` 默认值为公开仓库与发行版；新增
+  `docs/UPSTREAM.md` 来源说明；从源码/文档/测试移除机器相关用户名与局域网地址。
+
+### 可复现 Windows 发行版
+
+- 新增 `packaging/windows/`：确定性安装包 + 便携压缩包；不携带 `.venv`；
+  移除 Node 局域网代理；首次运行配置生成强随机密钥、限制 ACL、拒绝占位值；
+  定时任务监督长驻进程并限次重启；`LocalSubnet` 防火墙规则；升级保留配置；
+  支持卸载/回滚；校验和固定。
+- 新增零 token 的 Windows 打包/干净安装冒烟测试套件。
+
+### 通用 Android 端点与安全
+
+- 移除机器相关默认端点；首次启动必须输入服务器 origin。
+- 接受任意合法 HTTPS 根 origin；明文 HTTP 仅允许显式私有/本地 IP 字面量并
+  显示警告确认，拒绝公网 HTTP、userinfo、查询串、片段与非根路径。
+- 强化 WebView 强制：资源请求与主框架导航不能脱离所选 origin；外部链接在
+  系统浏览器打开且无桥接权限。保留 exact-origin 原生桥与包名 `dev.ccremote.lan`。
+- 新增 Android 端点单元测试，覆盖 `10/8`、`172.16/12`、`192.168/16`、回环、
+  HTTPS 与拒绝的公网 HTTP。
+
+### CI 与发布工作流
+
+- 新增 `ci.yml` push/PR 门禁（Linux + Windows 的 Python、Web、Android、
+  元数据、密钥/身份扫描），与 `release.yml` 标签发布分离。
+- 修复标签校验使 `v3.0.0-pager.5` 与权威发行元数据一致；所有发布产物从源码
+  构建；新增 SHA-256 校验和与 GitHub 证明（attestations）；支持从受保护密钥
+  签名 Android；任一门禁失败即阻止发布；第三方 action 固定到不可变 SHA。
+
 ## v3.0.0 — 2026-07-24
 
 cc-remote v3 在原有 Claude Code + Codex 远程控制面之上新增隔离的 Cowork 风格

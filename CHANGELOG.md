@@ -2,6 +2,53 @@
 
 [中文](CHANGELOG_zh.md)
 
+## v3.0.0-pager.5 — 2026-08-27
+
+Production release hardening of the native-pager distribution on cc-remote
+product v3.0.0 / wire protocol v19. No wire-protocol change.
+
+### Release metadata and repository identity
+
+- Introduce `deploy/release-metadata.json` as the single canonical source for
+  product version `3.0.0`, distribution `3.0.0-pager.5`, protocol `19`, Android
+  version code `30014`, application id `dev.ccremote.lan`, and the public
+  repository identity.
+- Fix clone/release URLs and `install.sh` defaults to the public repository and
+  the distribution release; add `docs/UPSTREAM.md` provenance; remove
+  machine-specific usernames and LAN addresses from source/docs/tests.
+
+### Reproducible Windows distribution
+
+- Add `packaging/windows/`: deterministic installer + portable archive, no
+  shipped `.venv`, no Node LAN proxy, first-run config with strong secrets,
+  restrictive ACLs, placeholder rejection, supervised scheduled tasks, a
+  LocalSubnet firewall rule, config preservation on upgrade, uninstall/rollback,
+  and checksum pinning.
+- Add a zero-token Windows packaging/clean-install smoke test suite.
+
+### Generic Android endpoint and security
+
+- Remove the machine-specific default endpoint; first launch requires entering a
+  server origin.
+- Accept any valid HTTPS root origin; for cleartext HTTP allow only explicit
+  private/local IP literals after a visible warning, and reject public HTTP,
+  userinfo, query, fragment, and non-root paths.
+- Harden WebView enforcement so resource requests and main-frame navigation stay
+  inside the selected origin; external links open in the system browser without
+  bridge access. Keep the exact-origin native bridge and package
+  `dev.ccremote.lan`.
+- Add Android endpoint unit tests covering `10/8`, `172.16/12`, `192.168/16`,
+  loopback, HTTPS, and rejected public HTTP.
+
+### CI and release workflow
+
+- Add `ci.yml` push/PR gate (Python on Linux + Windows, web, Android, metadata,
+  secret/identity scans) separate from `release.yml` tag releases.
+- Repair tag validation so `v3.0.0-pager.5` matches canonical distribution
+  metadata; build all release assets from source; add SHA-256 checksums and
+  GitHub attestations; support Android signing from protected secrets; make any
+  failed gate block publication; pin third-party actions to immutable SHAs.
+
 ## v3.0.0 — 2026-07-24
 
 cc-remote v3 adds an isolated Cowork-style Work surface to the established

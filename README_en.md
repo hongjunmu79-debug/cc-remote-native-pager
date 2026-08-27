@@ -1,22 +1,30 @@
-# cc-remote
+# cc-remote native pager
 
 **Bring Claude Code / Codex on your machine to your phone and any browser.**
 
 Self-hosted · Dual-engine · Multi-session · Live process · Responsive Web
 
-**Current release: v3.0.0** · Wire protocol v19
+**Current release: v3.0.0** · Distribution `3.0.0-pager.5` · Wire protocol v19
 
 [中文](README.md) ·
-[5-minute quick start](#quick-start-local-one-machine-5-min) ·
-[Production deploy](#production-deploy-public-vps-relay--wrapper-on-your-machine) ·
+[Journey 1: Windows + Android on a LAN](#journey-1-windows--android-on-a-trusted-lan) ·
+[Journey 2: remote access](#journey-2-https-relay--wrapper-for-remote-access) ·
 [Security](#security-please-read) ·
-[Changelog](CHANGELOG.md)
+[Changelog](CHANGELOG.md) ·
+[Upstream provenance](docs/UPSTREAM.md)
 
 cc-remote is an open-source remote control plane. A local `wrapper` drives the
+
+![cc-remote Claude sessions and model controls](assets/readme-model-controls.jpg)
 already installed and authenticated `claude` / `codex` CLI, while browsers view
 and control its sessions through your self-hosted WebSocket relay. Models,
 authentication, and tool execution remain under the local CLI; cc-remote does
 not proxy model APIs or bake API keys into the web client.
+
+This repository also ships a native **Android pager** (`dev.ccremote.lan`): one
+WebView owns authentication, WebSocket transport, and the chat surface, while a
+Jetpack Compose dashboard projects the session state through an exact-origin
+bridge. There is no second session state machine.
 
 v3.0.0 is not a visual rebrand. It adds isolated Code / Work spaces on top of
 the existing two-engine, multi-session remote control plane, while redesigning
@@ -31,17 +39,16 @@ sessions, stale App/CLI state, mobile history jumps, and cross-machine leakage.
 ## Table of contents
 
 - [What changed in v3](#what-changed-in-v3)
-- [Core capabilities](#core-capabilities)
+- [Prerequisites](#prerequisites)
+- [Journey 1: Windows + Android on a trusted LAN](#journey-1-windows--android-on-a-trusted-lan)
+- [Journey 2: HTTPS relay + wrapper for remote access](#journey-2-https-relay--wrapper-for-remote-access)
 - [Architecture](#architecture)
-- [Real interface and practical features](#real-interface-and-practical-features)
-- [Quick start (local, one machine, 5 min)](#quick-start-local-one-machine-5-min)
-- [One-command GitHub Release install (recommended for production)](#one-command-github-release-install-recommended-for-production)
-- [Production deploy (public VPS relay + wrapper on your machine)](#production-deploy-public-vps-relay--wrapper-on-your-machine)
 - [Environment variables](#environment-variables)
 - [Auth model](#auth-model)
 - [Reliability boundary](#reliability-boundary)
+- [Operations](#operations)
 - [Security (please read)](#security-please-read)
-- [Model backend (optional)](#model-backend-optional)
+- [Release maintainers](#release-maintainers)
 - [Development](#development)
 - [FAQ](#faq)
 - [License](#license)
@@ -73,259 +80,160 @@ with the previous public release, the major changes are:
 See [CHANGELOG.md](CHANGELOG.md) for the complete release notes and upgrade
 requirements.
 
-## Core capabilities
+## Prerequisites
 
-| Scenario | What you can do |
-|---|---|
-| **Two engines** | Use Claude Code and Codex in the same web UI. Every session keeps its own model, reasoning effort, permissions, and runtime state. |
-| **Code / Work spaces** | Code remains repository-oriented. Work is an independent Cowork surface for documents, spreadsheets, presentations, research, and temporary collaboration, with a separate session list. |
-| **Work projects and knowledge** | Keep provider-scoped projects, file/link/note sources, and reusable work templates. Starting a Work session materializes the selected context into its private directory. |
-| **Work schedules and isolation** | Run one-shot, daily, or weekly tasks with persisted run records, leases, retries, and overlap prevention. Each work item can access only its private directory; add required material explicitly through attachments or the project knowledge collection. |
-| **Remote operation** | Watch streaming replies from a phone, tablet, or desktop browser; send attachments, queue the next message, and interrupt the current turn at any time. |
-| **Complete process** | Expand the reasoning summaries, plans, command output, file diffs, MCP calls, collaboration agents, Hooks, and terminal interaction events exposed by each engine. |
-| **Artifacts and file preview** | Work automatically lists files produced by the current task. Source opens at referenced lines, Markdown is previewable and conflict-safe to edit, HTML renders in an isolated iframe, images/PDF open directly, and DOCX/XLSX/PPTX are previewed after a temporary sandboxed conversion on the wrapper host. |
-| **Human approval** | Return Claude `can_use_tool` decisions and Codex command, file-change, user-input, general-permission, and MCP elicitation responses. Mirror a terminal-owned session read-only or take it over explicitly. |
-| **Session management** | Search, switch, rename, archive, delete, and fork from individual messages. Codex supports explicit compact, native Review, and isolated Git worktree forks. |
-| **Runtime controls** | Change the model, reasoning effort, service tier, permissions, and Plan mode. Codex Code uses `/permissions` for approval control while inheriting the local Sandbox configuration. Use `/goal` for long-running goals and `/status` for read-only app-server status, usage, and rate limits. |
-| **Real extension catalog** | Open `/extensions`, `/skills`, `/plugins`, `/apps`, `/mcp`, or `/hooks` against the current engine. Code can manage Skills, plugins, and Claude Hooks where the engine allows it; Codex Hooks remain read-only because the official API has no write path. Work presents every extension category read-only to preserve its private environment. |
-| **Continuity** | Let background sessions keep running and synchronize them across clients. Paint the browser projection first, validate paged materialized summaries from Claude transcripts or Codex rollouts, and resume only the live tail after reconnecting. |
-| **Multi-machine and PWA** | Connect multiple named wrappers to one relay and optionally restrict accounts to selected machines. Install the web client as a PWA and receive generic background completion/failure notifications without conversation content. |
-| **Self-hosted** | The wrapper only makes outbound connections. Sessions, Work data, and preview conversion stay on that machine; the replaceable VPS remains a stateless relay. Web auth uses an HttpOnly cookie, and CLI credentials or API keys never enter the frontend. |
+cc-remote **does not install or log in an agent CLI for you.** Before starting
+either journey you must already have a working installation of **Claude Code**
+and/or **Codex CLI**, signed in and able to chat on its own:
 
-> Available models, service tiers, and runtime controls depend on the local CLI and the capabilities exposed by its SDK or app-server.
+- **Claude Code** — a signed-in `claude` that responds in your terminal.
+- **Codex CLI** — a signed-in `codex` whose `app-server` can start.
 
-## Architecture
+The wrapper drives these existing installations and never replaces them. Model
+credentials and the model API stay on the agent machine; cc-remote only moves
+the control link (session view + commands) over your self-hosted relay.
 
-Two **independent** links:
+Office artifact preview (DOCX/XLSX/PPTX → PDF) additionally requires
+**LibreOffice** on the wrapper host. It is optional everywhere else.
+
+---
+
+## Journey 1: Windows + Android on a trusted LAN
+
+The fastest full experience: a **Windows machine** runs the relay and the
+wrapper (packaged as a Windows service or portable archive), and an **Android
+phone** on the same LAN runs the native pager (`dev.ccremote.lan`) or the
+responsive web client. No public VPS, no domain, no TLS needed — traffic stays
+inside your LAN.
 
 ```
-MODEL LINK (cc-remote never touches):  claude / codex ──(their local config)──▶ model service
-
-CONTROL LINK (this repo):              browser ⇄ relay(WebSocket) ⇄ wrapper ⇄ SDK / app-server ⇄ local CLI
+Android pager / phone browser ──http://<windows-lan-ip>:8766──▶ Windows relay+wrapper
+                                                                  └─ drives local claude / codex
 ```
 
-| Component | Runs where | What it does |
-|---|---|---|
-| **wrapper** | the machine where `claude` / `codex` runs | Holds a session pool, translates SDK/app-server events to the wire protocol, handles interrupt/drain, reads transcript/rollout history on demand, and temporarily converts Office previews locally. **Outbound-only to the relay — no inbound ports needed.** |
-| **relay** | public VPS (or local) | Pure WebSocket forwarder (FastAPI). It keeps one wrapper slot per `machine_id`; browsers use an HttpOnly session cookie and receive events only from their selected machine. **Does not persist sessions or artifacts, never imports `claude-agent-sdk`, and never touches the model API.** |
-| **web** | the browser | React client; the relay serves its static files (`web/dist`) from the same origin. |
+![cc-remote multi-session workspace](assets/readme-multi-session.jpg)
 
-### Code and Work
+### 1) Install the Windows distribution
 
-The **Code / Work** switch at the top of the sidebar reuses the same Claude and
-Codex engines while isolating storage, session lists, and permissions:
+Download the `3.0.0-pager.5` Windows installer (or portable archive) from the
+[GitHub Release](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5),
+then run `setup.ps1` (or extract the portable archive and run
+`start.ps1`). The installer:
 
-- **Code** preserves the existing repository-oriented behavior for development,
-  debugging, and deployment.
-- **Work** targets documents, spreadsheets, presentations, research, knowledge
-  collections, and temporary chats. Claude stores it under
-  `~/.claude/cc-remote/work` and Codex under `~/.codex/cc-remote/work` by default.
-  Every work item has its own `workspace/` and uploads. Artifacts are ordinary
-  files produced inside that workspace. Deletion is limited to a directory that
-  the registry proves belongs to Work. Work replaces both CLIs' coding-oriented
-  base prompts: casual chat does not inspect files or mention code projects, while
-  explicit software requests can still use the same engines and tools.
-- Work does not expose the home directory or arbitrary external directories.
-  Add existing material explicitly through attachments or the project knowledge
-  collection so a conversation cannot discover unrelated projects or history.
-- A Work template is an instruction/workflow template written into the
-  project's `WORK.md`; it does not execute unreviewed third-party code. Scheduled
-  tasks are persisted and claimed by the wrapper under the same Work isolation.
+- installs to a directory you choose (no fixed path);
+- generates strong `SESSION_SECRET` and `WRAPPER_TOKEN`;
+- asks for the web login password, machine name, default workspace, and the
+  LAN endpoint/port;
+- detects `claude` and `codex` without copying their credentials;
+- writes configuration with restrictive user-only ACLs and refuses placeholder
+  values;
+- registers scheduled tasks that supervise the long-lived relay/wrapper
+  processes with bounded restart-on-failure;
+- creates a firewall rule limited to `LocalSubnet` on the selected port;
+- preserves the existing configuration on upgrade and supports clean
+  uninstall/rollback without touching Claude/Codex sessions or credentials.
 
-### How native terminals and Remote cooperate
+Unattended/silent installs are supported by passing a config file. See
+[packaging/windows/README.md](packaging/windows/README.md).
 
-Code sessions follow each CLI's real control plane without replacing official
-commands:
+### 2) Note the LAN endpoint
 
-- **Claude:** `claude` always remains the official command and official TUI;
-  cc-remote installs no alias, shim, or PATH interception. Sessions opened directly
-  by `claude`, Claude Desktop, or Agent View are read-only mirrors in Remote by
-  default, which prevents two independent input owners. To write from Remote, the
-  user explicitly chooses takeover; cc-remote sends SIGTERM only to the exact
-  same-user Claude process identity, waits for release, and then resumes the same
-  session through the SDK. It never kills the terminal shell, escalates to SIGKILL,
-  or takes over a process silently.
-- **Codex Code:** prefers Codex's official shared app-server daemon, so native
-  Codex clients and Remote share the thread and control state. If the installed
-  version cannot provide it, cc-remote explicitly falls back to a private
-  app-server. Set `CC_REMOTE_CODEX_DAEMON=off` for troubleshooting.
-- **Work:** Claude and Codex Work keep private processes and directories and do
-  not join the Code control plane, preventing work material from leaking into code
-  sessions.
-
-### Where artifact preview runs
-
-- HTML is sanitized with DOMPurify in the browser and rendered in a scriptless,
-  network-blocked sandbox iframe.
-- PNG/JPEG/GIF/WebP/AVIF and PDF are path-, type-, and size-checked by the wrapper,
-  then returned only to the requesting browser through the authenticated WebSocket.
-- DOC/DOCX/ODT/RTF, XLS/XLSX/ODS, and PPT/PPTX/ODP are converted to PDF by
-  LibreOffice on the **wrapper host**. On Linux, bubblewrap removes network and
-  user-directory access and mounts only that request's temporary directory. The
-  directory is deleted immediately after conversion.
-- The VPS relay forwards bounded preview frames and stores neither originals nor
-  converted files. Replacing the VPS requires no session migration. Moving to a
-  new wrapper device means migrating the local transcripts/rollouts, Work roots,
-  and cc-remote state.
-
-## Real interface and practical features
-
-The screenshots below come from a running cc-remote installation, not design mockups.
-
-### Multi-session management: keep work running in the background
-
-The session pool groups conversations by working directory and lets you search,
-switch, rename, and archive them. You can move to another session while one is
-still working in the background, then return to its complete live progress.
-Claude Code and Codex share the same workspace while retaining independent
-context, models, permissions, and runtime state.
-
-![Multi-session workspace grouped by project with search and switching](assets/readme-multi-session.jpg)
-
-### Claude Code: see reasoning, tool calls, and Hooks
-
-A Claude session is more than a simplified chat showing only the final text.
-cc-remote receives the reasoning, command calls, tool results, and Hook lifecycle
-events exposed by the Claude Code SDK and presents them as a collapsible timeline.
-The composer also shows the session's current model, reasoning effort, permission
-mode, and context usage.
-
-![Claude Code reasoning, command calls, and Hook events](assets/readme-claude-session.jpg)
-
-### New sessions: choose the engine and working directory first
-
-Create either a Claude Code or Codex session from one entry point, browse for its
-working directory, and attach images or files to the first message. Once the
-session exists, adjust its model, permissions, or Plan mode only when needed
-instead of filling in a row of defaults up front.
-
-![Create a new session by choosing its engine and working directory](assets/readme-new-session.jpg)
-
-### Codex: preserve plans and the complete process
-
-Codex sessions organize the reasoning summaries, plans, commands, diffs, MCP
-calls, collaboration agents, and Hooks reported by app-server into a collapsible
-timeline. Expand it while a turn is running to follow the details, then collapse
-the completed work into a concise summary; the final response always remains
-separate.
-
-![Collapsible Codex plan, Hook, and tool-call timeline](assets/readme-process-timeline.jpg)
-
-### Per-session Codex controls: model, reasoning, permissions, and status
-
-The model, reasoning effort, service tier, and permissions belong to the current
-session, so you can change the next turn without editing the machine's global
-configuration. The composer also provides attachments, queue/interrupt controls,
-context usage, and command entry points such as `/goal` and `/status`.
-
-![Codex model selection and per-session controls](assets/readme-model-controls.jpg)
-
-### Common operations at a glance
-
-- **Sessions:** create, search, run in the background, rename, archive, delete, fork, compact Codex context, run native Review, and create an isolated Codex worktree.
-- **Turns:** stream, queue, interrupt, copy, edit and resend, or fork from a specific message.
-- **Tools:** inspect command output, file changes and diffs, MCP, collaboration agents, Hooks, approvals, and user-input requests.
-- **Terminal coordination:** Codex Code shares the official daemon with native
-  bidirectional control. Native Claude CLI, Desktop, and Agent View sessions are
-  mirrored read-only until the user explicitly takes over from Remote.
-- **Status:** inspect the model, reasoning effort, permissions, Plan mode, context, goals, usage, rate limits, and runtime warnings.
-- **Extensions:** inspect the live Skills, Plugins, Apps, MCP, and Hooks inventory.
-  Code can create/remove local Skills, manage Claude Hooks, and install/uninstall
-  plugins through native managers where supported. Codex Hooks and every Work
-  extension category remain read-only.
-- **Devices:** use a responsive mobile UI, light or dark themes, multi-browser/multi-machine synchronization, PWA installation, background completion alerts, and reconnect recovery.
-
-## Quick start (local, one machine, 5 min)
-
-First get the relay + wrapper + web running on the **machine where the agent CLI runs** to validate the whole chain. Production deploy is the next section.
-
-### Prerequisites
-
-- A machine signed in to **Claude Code** or to a **Codex CLI** that supports `app-server`, with the CLI itself already **able to chat**. Claude uses the official CLI bundled with the locked and regression-tested SDK by default; each new Codex app-server reselects the newest usable local install. Make both available to switch engines in the web UI.
-- **Python 3.10+**, **Node 20.19+** (to build the web client).
-- Optional: Office artifact preview requires **LibreOffice + bubblewrap** on the
-  Linux wrapper host (for example, `sudo apt install libreoffice bubblewrap`).
-  The VPS does not need either package.
-
-### 1) Install deps + build the web client
+The installer prints the relay origin, for example `http://192.168.1.23:8766/`.
+That exact origin is what the Android app (and any browser on the LAN) will
+connect to. Verify the web client from another machine:
 
 ```bash
-git clone https://github.com/muggle-stack/cc-remote.git && cd cc-remote
+curl http://<windows-lan-ip>:8766/healthz
+# expect: {"ok":true,"wrapper_connected":true,"clients":0}
+```
 
-python3 -m venv .venv && source .venv/bin/activate
+### 3) Install and open the Android pager
+
+1. Build or download the Android APK (see the Android notes below), install it,
+   and launch.
+2. First launch shows the server-entry screen — enter the relay origin
+   (`http://<windows-lan-ip>:8766/`).
+   - HTTPS root origins are always accepted.
+   - Cleartext HTTP is accepted only for explicit private/local IP literals
+     (RFC1918 `10/8`, `172.16/12`, `192.168/16`, loopback) and requires the
+     visible warning confirmation. Public HTTP, userinfo, query strings,
+     fragments, and non-root paths are rejected.
+3. Log in with the web login password you chose during installation.
+4. The WebView owns login/WebSocket/chat; the native dashboard projects the
+   same session state through the bridge. Keep one session state machine.
+
+### 4) (Web-only alternative) use the responsive web client
+
+Open `http://<windows-lan-ip>:8766/` in any browser on the LAN and log in. The
+web client installs as a PWA and works on the phone too; the native pager adds
+the bounded dashboard projection on top.
+
+### 5) Local one-machine quick start (source checkout)
+
+For a single machine with Python + Node already installed:
+
+```bash
+git clone https://github.com/hongjunmu79-debug/cc-remote-native-pager.git
+cd cc-remote-native-pager
+
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install --require-hashes --only-binary=:all: -r requirements.lock
 
 npm --prefix web ci
 npm --prefix web run build          # produces web/dist/
-```
 
-### 2) Configure
-
-```bash
-install -m 600 .env.example .env
+install -m 600 .env.example .env    # Windows: copy .env.example .env
 ```
 
 Edit `.env` — at minimum:
 
 ```ini
-# web login password (pick a strong one)
 LOGIN_PASSWORD=<a strong password>
-# HMAC secret used to sign session tokens
 SESSION_SECRET=<openssl rand -hex 32>
-# shared token between wrapper and relay
 WRAPPER_TOKEN=<openssl rand -hex 32>
-# exact browser origin; plain HTTP is allowed only on loopback
 PUBLIC_ORIGIN=http://127.0.0.1:8765
-# let the relay serve the web client from the same origin
 WEB_STATIC_DIR=web/dist
-# default working directory of the agent session (the project you want it to work on)
-CC_CWD=/path/to/your/project
-# optional explicit Claude CLI path when systemd/PATH cannot find it
-CLAUDE_BIN=/absolute/path/to/claude
+CC_CWD=C:\path\to\your\project
 ```
 
-> For a local loopback quick start, the relay and wrapper may share this `.env`;
-> it is not a production secret store. A public deployment must use the
-> root-only `/etc/cc-remote/wrapper.env` below so bypass-permissions model/tools
-> cannot read control-plane credentials directly.
-
-### 3) Run (two terminals)
+Run in two terminals:
 
 ```bash
-# Terminal 1: relay (serves web + /ws + /api on http://127.0.0.1:8765)
-python -m cc_remote.relay
-
-# Terminal 2: wrapper (drives the local claude / codex CLI)
-python -m cc_remote.wrapper
+python -m cc_remote.relay          # serves web + /ws + /api
+python -m cc_remote.wrapper        # drives the local claude / codex CLI
 ```
 
-### 4) Open the web client
+Then open `http://127.0.0.1:8765` and log in.
 
-Browse to **http://127.0.0.1:8765** → log in with `LOGIN_PASSWORD` → send a message. You should see streaming replies, interrupt, and multi-session switching.
+![cc-remote new session start](assets/readme-new-session.jpg)
 
-> To hack on the UI use dev mode: `npm --prefix web run dev` (Vite). For running/testing, the `build` + relay-served approach above is simpler (same origin).
+> For LAN use (browsers or the Android pager reaching a non-loopback IP), set
+> `RELAY_HOST=0.0.0.0` and `PUBLIC_ORIGIN=http://<lan-ip>:8765`, and ensure the
+> firewall allows the port on the LAN subnet. The packaged Windows distribution
+> does this for you.
 
-## One-command GitHub Release install (recommended for production)
+---
 
-Published releases split Relay and Wrapper into system/architecture-specific
-artifacts. Relay contains only the backend and prebuilt Web client; Wrapper
-contains only the local control plane. Both bundle `uv` and create a managed
-Python 3.13 environment during installation. Users do not need to clone the
-repository, install Node, or paste tokens into service definitions.
+## Journey 2: HTTPS relay + wrapper for remote access
 
-| Role | System | Architectures | Service |
-|---|---|---|---|
-| Relay | Ubuntu 22.04+ / Debian 12+ | x86_64, arm64 | systemd + Caddy |
-| Wrapper | macOS | Intel, Apple Silicon | per-user LaunchAgent |
-| Wrapper | glibc Linux with systemd (Ubuntu 22.04+ / Debian 12+ recommended) | x86_64, arm64 | systemd under a chosen ordinary user |
+Move the relay to a **public VPS** with a domain (Caddy auto-provisions TLS),
+keep the wrapper on your agent machine (or on the Windows machine), and reach
+everything from anywhere over `wss://`.
+
+```
+agent machine wrapper ──wss:443──▶ Caddy(VPS, auto HTTPS) ──▶ relay(127.0.0.1:8765) ◀──wss:443── phone browser
+                                                                    └─ serves web/dist (same origin)
+```
+
+![cc-remote Claude session](assets/readme-claude-session.jpg)
 
 ### 1) Download and verify the bootstrap
 
 Confirm the version and release attestation on GitHub, then download
-`install.sh` and `SHA256SUMS` from that same release:
+`install.sh` and `SHA256SUMS` from the same release:
 
 ```bash
-release=https://github.com/muggle-stack/cc-remote/releases/download/v3.0.0
+release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5
 curl -fLO "$release/install.sh"
 curl -fLO "$release/SHA256SUMS"
 
@@ -365,15 +273,14 @@ machine, then run:
 ./install.sh wrapper \
   --relay https://remote.example.com \
   --pair XXXXX-XXXXX-XXXXX-XXXXX \
-  --name "MacBook Pro"
+  --name "Desktop"
 ```
 
 Run the macOS installer as the logged-in desktop user; it creates a per-user
 LaunchAgent. Linux requests `sudo`, while Wrapper and all model/tool descendants
 still run as the ordinary user who started installation. The long-lived device
-credential is stored only in a mode-`0600` private config:
-`~/.cc-remote/device.json` on macOS or `/etc/cc-remote/device.env` on Linux. It
-is never embedded in a plist, systemd unit, or release directory.
+credential is stored only in a mode-`0600` private config. It is never embedded
+in a plist, systemd unit, or release directory.
 
 For an upgrade, download the new version's `install.sh` and rerun it. Relay
 still needs `--domain`; a previously paired Wrapper needs only:
@@ -387,33 +294,16 @@ window, then hard-refresh open browser tabs. The installers retain the previous
 release and restore both `current` and the service definition if activation
 does not become healthy.
 
-## Production deploy (public VPS relay + wrapper on your machine)
+### 4) Use the Android pager remotely
 
-The source-staging/manual path below remains available for development, custom
-deployments, and recovery. Normal production installs should prefer the GitHub
-Release path above. Move the relay to the public internet; the wrapper dials it
-**outbound** over `wss://`, and phones hit the same domain. The model link is
-untouched.
+Enter `https://remote.example.com/` on first launch. HTTPS root origins are
+always accepted; the WebView then owns login/WebSocket/chat exactly as it does
+on the LAN. Public cleartext HTTP is rejected by design.
 
-```
-your machine wrapper ──wss:443──▶ Caddy(VPS, auto HTTPS) ──▶ relay(127.0.0.1:8765) ◀──wss:443── phone browser
-                                                                └─ serves web/dist (same origin)
-```
+### 5) Generate tokens manually (source staging path)
 
-### Prerequisites
-
-- **VPS**: Ubuntu 22.04+ / Debian 12+ (or another Debian-family host with Python 3.10+) with **ports 80 + 443** open (80 for Let's Encrypt, 443 for wss).
-- **Domain**: an A record pointing at the VPS IP (Caddy auto-provisions + renews the TLS cert).
-- **Your machine**: Linux (systemd runs the wrapper below), outbound 443 allowed.
-
-If you do not have a domain yet, a temporary public-IPv4 + plain-HTTP/WS
-escape hatch is also supported: open port 80 on the VPS and allow outbound 80
-from the wrapper machine. Caddy still proxies to the loopback-only relay, so
-request limits and service hardening remain in place, but there is **no
-transport encryption**: the login password, cookie, wrapper token, and all
-session content can be read or modified on the network path.
-
-### 1) Generate tokens / password
+The source-staging/manual path remains available for development, custom
+deployments, and recovery:
 
 ```bash
 openssl rand -hex 32   # WRAPPER_TOKEN (must match on relay + wrapper)
@@ -421,169 +311,72 @@ openssl rand -hex 32   # SESSION_SECRET (relay)
 # also pick a LOGIN_PASSWORD (web login password)
 ```
 
-### 2) Build the web client on your dev machine
-
-```bash
-npm --prefix web ci
-npm --prefix web run build   # produces web/dist/
-```
-
-> The web client no longer bakes any token into the JS: login POSTs the password to the relay for a short-lived session token. So the build needs no `VITE_*` variables.
-
-> **Upgrading to protocol v19:** the wire gate rejects mixed versions. Deploy
-> `cc_remote/` and the new `web/dist/` in one maintenance window, then restart the
-> relay and wrapper; do not run a rolling mixture. Existing sockets reconnect
-> briefly, and a relay restart intentionally requires browsers to log in again.
-> Any already-open older page also needs one **hard refresh** to load the new hashed
-> assets; logging in again inside the old JavaScript bundle isn't sufficient.
-> For a manual release, stop the local wrapper first, stop and update relay + web,
-> then start the v19 relay and v19 wrapper so the old wrapper cannot occupy the
-> slot for the same `machine_id`.
-
-### 3) Upload staging, then publish it as an atomic release
-
-```bash
-# dev machine: the normal account writes its own staging directory, not root-owned /opt
-rsync -av --delete --exclude='.git' --exclude='.venv' \
-  --exclude='web/node_modules' --exclude='.env' \
-  ./ <vps-user>@<vps>:~/cc-remote-upload/
-
-# VPS: never overlay the running /opt tree with the staging upload
-ssh <vps-user>@<vps>
-sudo mkdir -p /opt/cc-remote
-```
-
-The installer copies staging into a new
-`/opt/cc-remote/releases/release-*`, builds a release-local venv, and switches
-`/opt/cc-remote/current` atomically only after every check passes. The previous
-full code, `web/dist`, and venv remain available for rollback; the dirty live
-tree is never updated with `rsync --delete`.
-
-### 4) VPS: fill `.env` + run setup
-
-```bash
-# on the VPS: .env is the only runtime config shared by releases
-sudo test -f /opt/cc-remote/.env || sudo install -m 600 \
-  ~/cc-remote-upload/deploy/env.relay.example /opt/cc-remote/.env
-sudoedit /opt/cc-remote/.env
-# set LOGIN_PASSWORD / SESSION_SECRET / WRAPPER_TOKEN and keep:
-# WEB_STATIC_DIR=/opt/cc-remote/current/web/dist
-
-# for upgrades, stop the local wrapper first; then switch relay + web together
-sudo bash ~/cc-remote-upload/deploy/setup-vps.sh \
-  your-domain.com ~/cc-remote-upload
-```
-
-For a public-IPv4-only deployment, use this matching configuration and target:
-
-```ini
-# /opt/cc-remote/.env
-PUBLIC_ORIGIN=http://your-public-ip
-ALLOW_INSECURE_HTTP=1
-```
-
-```bash
-sudo bash ~/cc-remote-upload/deploy/setup-vps.sh \
-  your-public-ip ~/cc-remote-upload
-```
-
-The installer selects the plain-HTTP Caddy template only when the opt-in is
-enabled, the argument is a public IPv4 address, and `PUBLIC_ORIGIN` matches it
-exactly. Private, loopback, reserved, and malformed addresses fail closed.
-
-The script installs `python3-venv` + Caddy, creates the `ccremote` service user,
-builds an immutable release and its venv, merges Caddy configuration, atomically
-switches `current`, and restarts the relay. If restart/readiness fails, `current`,
-the Caddyfile, and the systemd unit roll back as one transaction and the previous
-release's `/healthz` is verified. Start the v19 wrapper after success.
+Build the web client and upload the staging tree to the VPS, then run
+`deploy/setup-vps.sh your-domain.com ~/cc-remote-upload`. The installer builds
+an immutable release + venv, atomically switches `/opt/cc-remote/current`, and
+rolls back `current`, the Caddyfile, and the relay unit together on failure.
+See [deploy/README.md](deploy/README.md).
 
 Verify:
 
 ```bash
-curl https://your-domain.com/healthz
+curl https://remote.example.com/healthz
 # expect: {"ok":true,"wrapper_connected":false,"clients":0}
 ```
 
-In insecure mode, use `curl http://your-public-ip/healthz` instead.
+---
 
-### 5) Your machine: root-only wrapper environment + systemd
+## Architecture
 
-For Office artifact preview, install the converter sandbox on this wrapper host,
-not on the VPS:
+Two **independent** links:
 
-```bash
-sudo apt-get update && sudo apt-get install -y libreoffice bubblewrap
+```
+MODEL LINK (cc-remote never touches):  claude / codex ──(their local config)──▶ model service
+
+CONTROL LINK (this repo):              browser ⇄ relay(WebSocket) ⇄ wrapper ⇄ SDK / app-server ⇄ local CLI
 ```
 
-```bash
-cd /path/to/cc-remote
-python3 -m venv .venv
-.venv/bin/pip install --require-hashes --only-binary=:all: -r requirements.lock
+| Component | Runs where | What it does |
+|---|---|---|
+| **wrapper** | the machine where `claude` / `codex` runs | Holds a session pool, translates SDK/app-server events to the wire protocol, handles interrupt/drain, reads transcript/rollout history on demand, and temporarily converts Office previews locally. **Outbound-only to the relay — no inbound ports needed.** |
+| **relay** | public VPS (or the LAN machine) | Pure WebSocket forwarder (FastAPI). It keeps one wrapper slot per `machine_id`; browsers use an HttpOnly session cookie and receive events only from their selected machine. **Does not persist sessions or artifacts, never imports `claude-agent-sdk`, and never touches the model API.** |
+| **web** | the browser / Android WebView | React client; the relay serves its static files (`web/dist`) from the same origin. |
+| **Android pager** | the phone | A bounded Jetpack Compose projection of the web reducer's state over an exact-origin WebMessage bridge. One WebView owns auth/WebSocket/chat. |
 
-# Root owns the secret source; model/tools run as your ordinary account and
-# cannot read this file directly.
-sudo install -d -o root -g root -m 0755 /etc/cc-remote
-sudo install -o root -g root -m 0600 deploy/env.wrapper.example \
-  /etc/cc-remote/wrapper.env
-sudoedit /etc/cc-remote/wrapper.env  # set RELAY_URL / WRAPPER_TOKEN / CC_CWD
+### How native terminals and Remote cooperate
 
-# Edit User and repository/venv/home paths; do not point it back at a repo .env.
-sudo cp deploy/cc-remote-wrapper.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now cc-remote-wrapper
-journalctl -u cc-remote-wrapper -f     # expect: connected to relay / wrapper running
-```
+Code sessions follow each CLI's real control plane without replacing official
+commands:
 
-In insecure mode, also set both wrapper-side values:
+- **Claude:** `claude` always remains the official command and official TUI;
+  cc-remote installs no alias, shim, or PATH interception. Sessions opened
+  directly by `claude`, Claude Desktop, or Agent View are read-only mirrors in
+  Remote by default. To write from Remote, the user explicitly chooses takeover;
+  cc-remote sends SIGTERM only to the exact same-user Claude process identity,
+  waits for release, and then resumes the same session through the SDK.
+- **Codex Code:** prefers Codex's official shared app-server daemon, so native
+  Codex clients and Remote share the thread and control state. If the installed
+  version cannot provide it, cc-remote explicitly falls back to a private
+  app-server. Set `CC_REMOTE_CODEX_DAEMON=off` for troubleshooting.
+- **Work:** Claude and Codex Work keep private processes and directories and do
+  not join the Code control plane.
 
-```ini
-RELAY_URL=ws://your-public-ip/ws
-ALLOW_INSECURE_HTTP=1
-```
+### Where artifact preview runs
 
-Back on the VPS, the matching mode's `/healthz` should now show `wrapper_connected:true`.
+- HTML is sanitized with DOMPurify in the browser and rendered in a scriptless,
+  network-blocked sandbox iframe.
+- PNG/JPEG/GIF/WebP/AVIF and PDF are path-, type-, and size-checked by the
+  wrapper, then returned only to the requesting browser through the
+  authenticated WebSocket.
+- DOC/DOCX/ODT/RTF, XLS/XLSX/ODS, and PPT/PPTX/ODP are converted to PDF by
+  LibreOffice on the **wrapper host**. On Linux, bubblewrap removes network and
+  user-directory access. The directory is deleted immediately after conversion.
+- The relay forwards bounded preview frames and stores neither originals nor
+  converted files.
 
-#### Pair a Mac or Linux machine from Device Center (recommended)
+![cc-remote process timeline](assets/readme-process-timeline.jpg)
 
-Sign in, open the device icon in the header, and choose **Allow adding devices**.
-The page creates a single-use code that expires after 10 minutes by default:
-
-```bash
-python -m cc_remote.device pair https://your-domain.com XXXXX-XXXXX-XXXXX-XXXXX \
-  --name "MacBook Pro"
-python -m cc_remote.wrapper
-```
-
-Interactive pairing stores a mode-`0600` credential in
-`~/.cc-remote/device.json`. For a Linux systemd service, write the credential
-straight to a root-only EnvironmentFile and restart the wrapper:
-
-```bash
-sudo .venv/bin/python -m cc_remote.device pair \
-  https://your-domain.com XXXXX-XXXXX-XXXXX-XXXXX \
-  --name nono --env-file /etc/cc-remote/device.env
-sudo systemctl restart cc-remote-wrapper
-```
-
-The relay stores only the credential hash. Device Center shows online/offline
-state and supports switching, renaming, and per-device revocation. The legacy
-manual `WRAPPER_TOKEN` / `WRAPPER_TOKENS_JSON` path remains compatible.
-
-### 6) Verify from a phone
-
-Open the matching `https://your-domain.com/` or `http://your-public-ip/` on
-your phone (any network) → log in with `LOGIN_PASSWORD` → send a message. You
-should get streaming replies, interrupt, and multi-device sync.
-
-### Behind a corporate HTTP proxy?
-
-The wrapper dials out via `websockets`, which honors `HTTPS_PROXY` / `ALL_PROXY`.
-Add it to `/etc/cc-remote/wrapper.env`:
-
-```ini
-HTTPS_PROXY=http://your-proxy:port      # for SOCKS use ALL_PROXY=socks5://...
-```
-
-(If the proxy does TLS MITM, add its root CA to the system trust store.)
+---
 
 ## Environment variables
 
@@ -591,83 +384,158 @@ HTTPS_PROXY=http://your-proxy:port      # for SOCKS use ALL_PROXY=socks5://...
 
 | Var | Default | Notes |
 |---|---|---|
-| `RELAY_HOST` / `RELAY_PORT` | `127.0.0.1` / `8765` | Listen address (behind Caddy in prod — keep 127.0.0.1). |
+| `RELAY_HOST` / `RELAY_PORT` | `127.0.0.1` / `8765` | Listen address (behind Caddy in prod — keep 127.0.0.1; LAN setups set `0.0.0.0`). |
 | `LOGIN_PASSWORD` | empty | Single-user web login password. **Required** unless `LOGIN_USERS_JSON` is set. |
-| `LOGIN_USERS_JSON` | empty | Optional multi-user policy: `{"alice":{"password":"…","machines":["mac","nono"]}}`; replaces `LOGIN_PASSWORD`. |
+| `LOGIN_USERS_JSON` | empty | Optional multi-user policy; replaces `LOGIN_PASSWORD`. |
 | `SESSION_SECRET` | empty | HMAC secret to sign session tokens. **Required** (`openssl rand -hex 32`). |
-| `SESSION_TTL_SECONDS` | `604800` | Session token lifetime (default 7 days). |
-| `LOGIN_BODY_MAX_BYTES` / `LOGIN_READ_TIMEOUT` / `LOGIN_INFLIGHT_CAP` | `4096` / `10` / `32` | Hard limits for login body bytes, total read seconds, and concurrent body reads. |
-| `SESSION_REGISTRY_CAP` | `1024` | Hard limit for process-local revocable browser sessions. |
-| `PUSH_VAPID_PUBLIC_KEY` / `PUSH_VAPID_PRIVATE_KEY` / `PUSH_VAPID_SUBJECT` | empty | Optional real Web Push; all three must be configured. Prefer an absolute PEM path readable by the relay user. Payloads contain only completion/failure state, never conversation content. |
-| `PUSH_DB_PATH` | `~/.cc-remote/relay-push.sqlite3` | Durable browser subscription store, isolated by user and machine. |
-| `DEVICE_DB_PATH` | `~/.cc-remote/relay-devices.sqlite3` | Durable device names, last-seen metadata, and credential hashes; never sessions or artifacts. |
-| `DEVICE_PAIRING_TTL_SECONDS` | `600` | Lifetime of a single-use pairing code in seconds; allowed range 60–3600. |
-| `PUBLIC_ORIGIN` | empty | Exact browser origin allowed to connect, e.g. `https://remote.example.com`; **required**, and non-loopback origins must use HTTPS unless `ALLOW_INSECURE_HTTP` is enabled. |
-| `ALLOW_INSECURE_HTTP` | `0` | Escape hatch for a bare public IPv4 address: allows plain `http://`/`ws://` outside loopback. Off by default; login credentials, cookies, wrapper tokens, and all session traffic are unencrypted while enabled. Prefer TLS whenever possible. |
+| `PUBLIC_ORIGIN` | empty | Exact browser origin allowed to connect, e.g. `https://remote.example.com`; **required**, non-loopback origins must use HTTPS unless `ALLOW_INSECURE_HTTP` is enabled. |
+| `ALLOW_INSECURE_HTTP` | `0` | Escape hatch for a bare public IPv4 address. Off by default; credentials and all session traffic are unencrypted while enabled. Prefer TLS. |
 | `WRAPPER_TOKEN` | placeholder | Wrapper Bearer token for single-machine/compatibility mode; required unless `WRAPPER_TOKENS_JSON` is set. |
-| `WRAPPER_TOKENS_JSON` | empty | Optional machine-bound tokens: `{"mac":"…","nono":"…"}`; replaces the relay's wildcard `WRAPPER_TOKEN`. |
+| `WRAPPER_TOKENS_JSON` | empty | Optional machine-bound tokens; replaces the relay's wildcard `WRAPPER_TOKEN`. |
 | `WEB_STATIC_DIR` | empty | Point at `web/dist` to serve the web client same-origin; empty = API/WS only. |
-| `CLIENT_QUEUE_CAP` / `CLIENT_QUEUE_BYTES` | `4096` / `16777216` | Hard per-client pending-frame/byte limits; a slow client is disconnected instead of silently losing frames. |
-| `MAX_CLIENTS` / `CLIENT_HELLO_TIMEOUT` | `8` / `10` | Hard limits for accepted clients and seconds allowed for the first Hello frame. |
-| `WS_MAX_SIZE_BYTES` | `16777216` | Maximum single WebSocket frame accepted by both relay and wrapper transports. |
+| `DEVICE_PAIRING_TTL_SECONDS` | `600` | Lifetime of a single-use pairing code in seconds. |
 
 **Wrapper**
 
 | Var | Default | Notes |
 |---|---|---|
-| `RELAY_URL` | `ws://127.0.0.1:8765/ws` | Relay WebSocket URL (`wss://domain/ws` in prod, unless `ALLOW_INSECURE_HTTP` is set). |
-| `ALLOW_INSECURE_HTTP` | `0` | Same escape hatch as the relay; the wrapper reads it too so `RELAY_URL` can stay `ws://` against a non-loopback host. |
+| `RELAY_URL` | `ws://127.0.0.1:8765/ws` | Relay WebSocket URL (`wss://domain/ws` in prod). |
 | `WRAPPER_TOKEN` | `change-me-wrapper` | Same as relay. |
-| `CC_REMOTE_MACHINE_ID` | `default` | Stable route id on a multi-machine relay; must match its `WRAPPER_TOKENS_JSON` key when that policy is enabled. |
-| `CC_REMOTE_DEVICE_CONFIG` | `~/.cc-remote/device.json` | Interactive pairing credential; the file must be private to the current user. Explicit `RELAY_URL` / `WRAPPER_TOKEN` / `CC_REMOTE_MACHINE_ID` values take precedence. |
-| `CLAUDE_BIN` | empty | Optional absolute Claude CLI path; set it when systemd/PATH cannot find `claude`. |
-| `CC_REMOTE_CODEX_PROXY` | empty | Optional HTTP(S)/SOCKS5 proxy injected only into Codex subprocesses launched by the wrapper. It does not change the wrapper-to-relay connection or the user's terminal `codex`. |
-| `CC_REMOTE_CODEX_DAEMON` | `auto` | Code prefers Codex's official shared daemon; `off` forces private stdio app-server. Work is always private and ignores this setting. |
-| `CC_CWD` | cwd | Default working directory for new sessions. Claude `--resume` needs it to locate `~/.claude/projects/` — **it must be correct**; Codex resume first recovers the original cwd from its rollout. |
-| `CC_RESUME_SESSION_ID` | empty | Resume a specific session UUID; empty starts fresh. The id is persisted to `~/.cc-remote/` after first start. |
-| `CLAUDE_WORK_ROOT` | `~/.claude/cc-remote/work` | Private Claude Work root for the registry, knowledge sources, sessions, and generated policy files. |
-| `CODEX_WORK_ROOT` | `~/.codex/cc-remote/work` | Private Codex Work root for the registry, knowledge sources, sessions, and generated policy files. |
-| `MAX_CONCURRENT_SESSIONS` | `20` | Maximum resident agent subprocesses (memory varies by engine/version). Over the cap, an idle process is evicted; client history remains available. |
-| `DRAIN_TIMEOUT` | `15` | Seconds to wait for the terminal ResultMessage after interrupt before forcing a reconnect (drain safety net). |
-| `CODEX_TURN_IDLE_WARN_SECONDS` | `90` | Show a non-terminal waiting notice after this many seconds without a Codex app-server event; `0` disables it. It does not auto-interrupt long reasoning or tools. |
-| `RING_MAX_EVENTS` / `RING_MAX_BYTES` / `TOOL_RESULT_MAX` | see `.env.example` | Live-tail buffer / tool-output truncation tuning. |
-| `HISTORY_SOURCE_MAX_BYTES` | `67108864` | Safe source limit for one Claude transcript; larger SDK transcripts return an explicit error instead of exhausting memory. Codex rollouts are not subject to this whole-file cap. |
-| `CODEX_HISTORY_WINDOW_MAX_BYTES` | `33554432` | Maximum Codex rollout source window parsed per page. Long histories stream backwards by turn; an oversized single turn keeps its recent tail plus a stable cursor for loading older history. |
-| `WRAPPER_INBOX_CAP` / `WRAPPER_SEND_QUEUE_CAP` | `1024` / `8192` | Hard item-count bounds for the wrapper's inbound and outbound queues. |
-| `WRAPPER_INBOX_BYTES` / `WRAPPER_SEND_QUEUE_BYTES` | `33554432` / `33554432` | Hard serialized-byte bounds for the wrapper's inbound and outbound queues. |
-| `TURN_READER_QUEUE_CAP` | `4` | Per-turn engine-event consumer queue. Codex app-server stdout has a separate byte-bounded burst buffer so slow relay I/O cannot block RPCs or terminal events. |
+| `CC_REMOTE_MACHINE_ID` | `default` | Stable route id on a multi-machine relay. |
+| `CC_CWD` | cwd | Default working directory for new sessions; **must be correct** for Claude `--resume`. |
+| `CC_REMOTE_CODEX_DAEMON` | `auto` | Code prefers Codex's official shared daemon; `off` forces private stdio app-server. |
+| `MAX_CONCURRENT_SESSIONS` | `20` | Maximum resident agent subprocesses. |
+| `CLAUDE_WORK_ROOT` | `~/.claude/cc-remote/work` | Private Claude Work root. |
+| `CODEX_WORK_ROOT` | `~/.codex/cc-remote/work` | Private Codex Work root. |
 
-Each message accepts at most 8 attachments, at most 6 MiB each and 8 MiB decoded in total; oversized input is rejected before a model turn starts.
+Each message accepts at most 8 attachments, at most 6 MiB each and 8 MiB decoded
+in total; oversized input is rejected before a model turn starts.
+
+---
 
 ## Auth model
 
-- **Web client**: `POST /api/login` creates a short-lived HMAC session in an **HttpOnly, SameSite=Strict** cookie. JavaScript cannot read it and no token appears in the URL. With `LOGIN_USERS_JSON`, the signed session also carries its allowed machines; both discovery and WebSocket routing enforce that set. The WebSocket must also pass an exact `Origin` check.
-- **Wrapper ⇄ relay**: the WS handshake carries a machine credential. Manual setups use `WRAPPER_TOKEN` / `WRAPPER_TOKENS_JSON`; Device Center issues an independent, machine-bound, individually revocable credential. The relay stores only its hash, and no credential may announce another device's `machine_id`.
-- Tokens travel only in cookies/headers, never in URLs or wire-protocol message bodies; logging redacts token/password fields.
+- **Web client**: `POST /api/login` creates a short-lived HMAC session in an
+  **HttpOnly, SameSite=Strict** cookie. JavaScript cannot read it and no token
+  appears in the URL. The WebSocket must also pass an exact `Origin` check.
+- **Wrapper ⇄ relay**: the WS handshake carries a machine credential. Manual
+  setups use `WRAPPER_TOKEN` / `WRAPPER_TOKENS_JSON`; Device Center issues an
+  independent, machine-bound, individually revocable credential. The relay
+  stores only its hash, and no credential may announce another device's
+  `machine_id`.
+- **Android pager**: the embedded WebView shares the same browser session. The
+  native bridge is restricted to the exact configured origin; external links
+  open in the system browser without bridge access.
+- Tokens travel only in cookies/headers, never in URLs or wire-protocol message
+  bodies; logging redacts token/password fields.
+
+---
 
 ## Reliability boundary
 
-- The Web and TUI attach a stable `cmd_id` to retryable commands and resend them after a socket reconnect or wrapper recovery. The wrapper deduplicates them and ACKs completion within the same wrapper process lifetime. Each live session also pairs its cursor with a wrapper generation so a restart cannot make an old sequence number look current.
-- Unacknowledged-command queues and the general command-deduplication table are **bounded in-memory state**. A hard browser refresh, TUI exit, or wrapper crash does not promise cross-process exactly-once delivery. cc-remote is an interactive control plane, not a durable job queue; after such a failure, inspect the transcript/rollout and live session state before resending.
-- Persisted Claude transcripts and Codex rollouts are the history source of truth. The wrapper SQLite summary index and browser IndexedDB are rebuildable projections; the live ring only provides bounded reconnect catch-up. Heavy tool/reasoning detail loads per turn instead of blocking first paint.
-- Work schedules are the exception: schedules, run records, leases, heartbeats, retry counts, and next-run timestamps live in SQLite. An expired lease is recovered after a wrapper restart, but an uncertain outcome is never reported as success.
+- The Web and TUI attach a stable `cmd_id` to retryable commands and resend them
+  after a socket reconnect or wrapper recovery. The wrapper deduplicates them
+  and ACKs completion within the same wrapper process lifetime.
+- Unacknowledged-command queues and the general command-deduplication table are
+  **bounded in-memory state**. A hard browser refresh, TUI exit, or wrapper
+  crash does not promise cross-process exactly-once delivery.
+- Persisted Claude transcripts and Codex rollouts are the history source of
+  truth. The wrapper SQLite summary index and browser IndexedDB are rebuildable
+  projections; the live ring only provides bounded reconnect catch-up.
+- Work schedules are the exception: schedules, run records, leases, heartbeats,
+  retries, and next-run timestamps live in SQLite.
+
+---
+
+## Operations
+
+### Logs
+
+- **Linux/macOS**: `journalctl -u cc-remote-wrapper -f` and
+  `journalctl -u cc-remote-relay -f` (VPS); macOS uses `log show --predicate`.
+- **Windows**: the packaged scheduled tasks write JSON logs under the install
+  directory's `logs/` folder; `Get-Content -Wait logs\wrapper.log` works while
+  developing.
+
+### Health
+
+- Relay: `curl <origin>/healthz` → `{"ok":true,"wrapper_connected":...}`.
+- Wrapper log line `connected to relay` / `wrapper running`.
+- Android pager: the dashboard banner shows bridge/wrapper status.
+
+### Upgrade
+
+1. Stop the wrapper (or let the packaged tasks handle a restart window).
+2. Deploy the new Relay + Web bundle (VPS) and the new Wrapper (agent machine)
+   in one maintenance window; hard-refresh open browsers.
+3. On Windows, run the new installer over the existing install — configuration
+   is preserved.
+
+### Rollback
+
+- Linux/macOS releases keep the previous release directory; the installer
+  restores `current` and the service definition if activation fails.
+- Windows keeps the previous install tree; `uninstall.ps1 -Restore <version>`
+  can restore a prior snapshot.
+- The Android APK blocks version-code downgrades; roll back the web bundle
+  first, then publish a newer APK.
+
+### Uninstall
+
+- Windows: run `uninstall.ps1` from the install directory. It removes scheduled
+  tasks, the LocalSubnet firewall rule, and the installed files, but **never
+  deletes `~/.cc-remote`, Claude transcripts, Codex rollouts, or CLI
+  credentials**.
+- Linux/macOS: the release installer's `--uninstall` path removes the service
+  and release symlinks, preserving device credentials and session sources.
+
+### Common failure recovery
+
+| Symptom | Recovery |
+|---|---|
+| `protocol v19` gate errors | Relay/Web/Wrapper versions are mixed. Update all tiers to the same release and hard-refresh. |
+| Android pager shows no tasks | Log into the web chat once; the WebView owns the session. |
+| Wrapper cannot find `claude`/`codex` | Set `CLAUDE_BIN` or adjust PATH; both CLIs must already be signed in. |
+| Firewall blocks LAN access | Confirm the Windows rule is scoped to `LocalSubnet` on the selected port. |
+| Connection resets in a loop | Check `RELAY_URL`/`PUBLIC_ORIGIN` match, then check logs for drain/timeouts. |
+
+---
 
 ## Security (please read)
 
 > **cc-remote lets a remote person run arbitrary commands on your machine. Treat it like handing someone a shell.**
 
-- Code sessions remain a remote development control plane: Claude defaults to `permissionMode: bypassPermissions`, and Codex defaults to approval policy `never` while inheriting the machine's Codex sandbox configuration; both can expose approval controls in the web client. **Treat anyone who can log in and enter Code as holding remote agent/shell authority on the wrapper machine.** Work uses a separate private root and does not expose external directories, but this only narrows the default capability surface; it is not a substitute for OS-user, container, or VM isolation.
-- `LOGIN_PASSWORD` / `LOGIN_USERS_JSON`, `WRAPPER_TOKEN` / `WRAPPER_TOKENS_JSON`, and `SESSION_SECRET` form the authentication boundary: use strong random values, never commit or paste them into chats, and rotate them. A repository `.env` is for local development only; production wrappers must use the root-only `/etc/cc-remote/wrapper.env` above. The systemd template prevents the service and model descendants from reading that source file or a legacy repository `.env`; on Linux the wrapper also disables dumpability so children cannot recover captured credentials through `/proc/<pid>/environ` or process memory.
-- Always use TLS (`wss://`) in production. Only set `ALLOW_INSECURE_HTTP=1` for a temporary bare-public-IPv4 deployment; login credentials, cookies, wrapper tokens, and all session traffic are unencrypted while it is enabled, so switch back to TLS as soon as possible.
-- Recommended: restrict the relay by IP / only run it when needed; login is rate-limited (5/min per IP) out of the box.
+- Code sessions remain a remote development control plane: Claude defaults to
+  `permissionMode: bypassPermissions`, and Codex defaults to approval policy
+  `never` while inheriting the machine's Codex sandbox configuration. **Treat
+  anyone who can log in and enter Code as holding remote agent/shell authority
+  on the wrapper machine.** Work uses a separate private root and does not
+  expose external directories.
+- `LOGIN_PASSWORD` / `LOGIN_USERS_JSON`, `WRAPPER_TOKEN` /
+  `WRAPPER_TOKENS_JSON`, and `SESSION_SECRET` form the authentication boundary:
+  use strong random values, never commit or paste them into chats, and rotate
+  them. A repository `.env` is for local development only; production wrappers
+  must use a root-only environment file.
+- Always use TLS (`wss://`) in production. Only set `ALLOW_INSECURE_HTTP=1`
+  for a temporary bare-public-IPv4 deployment.
+- **LAN HTTP is still plaintext.** On a trusted LAN it is a convenience, not a
+  security boundary. Anyone who can sniff the LAN can read login credentials and
+  session content. Prefer the packaged firewall's `LocalSubnet` scoping and
+  avoid exposing the relay beyond your LAN.
+- Recommended: restrict the relay by IP / only run it when needed; login is
+  rate-limited (5/min per IP) out of the box.
 
-## Model backend (optional)
+---
 
-cc-remote **does not touch the model API** — it drives already-configured local CLIs. Claude uses `~/.claude/settings.json`; Codex uses its own login and `~/.codex/config.toml`. So:
+## Release maintainers
 
-- **Official Anthropic API**: install `claude`, make sure it can chat, done.
-- **Compatible endpoint (e.g. GLM / z.AI)**: set `ANTHROPIC_BASE_URL` in `settings.json` as usual (pointing at an official-compatible endpoint or your own proxy); cc-remote still only does the control link.
-- **Codex**: first make sure local `codex` can chat and `codex app-server` starts. cc-remote neither reads its API key nor rewrites global authentication.
+Versioning, release-tag validation, asset assembly, signing, and attestation
+are documented in [docs/release-hardening/RELEASE_MAINTAINER.md](docs/release-hardening/RELEASE_MAINTAINER.md).
+The single source of truth for versions and package defaults is
+[`deploy/release-metadata.json`](deploy/release-metadata.json); run
+`python -m deploy.validate_release_metadata` before any release.
+
+---
 
 ## Development
 
@@ -678,34 +546,46 @@ cc_remote/
   relay/           # FastAPI relay: server / auth / pairing / forward
   wrapper/         # Claude SDK + Codex app-server / pool / stream / ringbuffer / transport
 web/               # React client (Vite + TS)
+android-native/    # Jetpack Compose pager + WebView shell
+packaging/windows/ # reproducible Windows installer + portable archive
 tests/             # zero-token unit tests + e2e scripts
-deploy/            # Caddyfile / systemd / setup-vps.sh / env examples
+deploy/            # release metadata, Caddyfile / systemd / setup-vps.sh / env examples
 ```
 
 ```bash
 python -m pip install -r requirements-dev.txt
 pytest                              # unit tests (no model, zero tokens)
 npm --prefix web run test:reliability # pure web reliability tests
+npm --prefix web run lint           # web static checks
+npm --prefix web run build          # web production build
 
 # Explicit live path (requires a running relay + wrapper and calls the model)
 CC_REMOTE_RUN_E2E=1 CC_REMOTE_E2E_SCENARIO=smoke \
   RELAY_URL=wss://remote.example/ws LOGIN_PASSWORD='...' \
   pytest -q tests/test_e2e_entry.py
-npm --prefix web run lint           # web static checks
-npm --prefix web run dev            # web dev server
-npm --prefix web run build          # web production build
 ```
 
 Architecture notes & contribution contracts are in [CLAUDE.md](CLAUDE.md).
 
+---
+
 ## FAQ
 
-- **Does restarting the wrapper lose history?** Persisted history does not disappear; it comes from Claude transcripts / Codex rollouts. A restart does lose unacknowledged in-memory commands and the live ring; see the reliability boundary above.
-- **Does restarting the relay drop the session?** It briefly disconnects and requires login again because the process-local revocation registry resets. The conversation remains intact on the wrapper machine.
-- **Can I replace the VPS or move to a new device?** Yes. The VPS only serves the relay and static web bundle; it is not the session authority. Deploy the same version on the new VPS and point the wrapper at its new `RELAY_URL`. To move the wrapper, copy the Claude transcripts, Codex rollouts, `CLAUDE_WORK_ROOT` / `CODEX_WORK_ROOT`, and `~/.cc-remote`, re-authenticate each CLI on the new machine, then start the wrapper.
-- **Do I need inbound ports?** No. The wrapper only dials out to the relay.
-- **How expensive is it?** cc-remote itself has zero model cost; browsing / refreshing / viewing history spends no tokens. Actual model cost depends on the backend used by the local agent CLI.
+- **Does restarting the wrapper lose history?** Persisted history does not
+  disappear; it comes from Claude transcripts / Codex rollouts. A restart loses
+  unacknowledged in-memory commands and the live ring.
+- **Does restarting the relay drop the session?** It briefly disconnects and
+  requires login again. The conversation remains intact on the wrapper machine.
+- **Can I replace the VPS or move to a new device?** Yes. The VPS only serves
+  the relay and static web bundle. Move the wrapper by copying transcripts,
+  rollouts, Work roots, and cc-remote state, then re-authenticate the CLIs.
+- **Do I need inbound ports?** No — the wrapper only dials out to the relay. On
+  a LAN, the Windows machine must allow inbound connections on the selected
+  relay port from the LAN subnet.
+- **How expensive is it?** cc-remote itself has zero model cost; browsing /
+  refreshing / viewing history spends no tokens.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Upstream provenance and the pager adaptation are
+documented in [docs/UPSTREAM.md](docs/UPSTREAM.md).
