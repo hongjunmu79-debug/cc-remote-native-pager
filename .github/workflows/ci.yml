@@ -119,6 +119,7 @@ jobs:
             tests/test_release_distribution.py::test_release_metadata_android_signer_sha256_is_validated `
             tests/test_release_distribution.py::test_release_tag_contract_accepts_only_canonical_distribution_tag `
             tests/test_release_distribution.py::test_release_workflow_android_signing_is_fail_closed `
+            tests/test_release_distribution.py::test_release_smoke_bundle_root_derives_from_canonical_distribution_version `
             tests/test_release_distribution.py::test_release_workflow_publish_is_tag_push_only `
             -q
 

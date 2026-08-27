@@ -202,7 +202,13 @@ jobs:
         run: |
           smoke="$(mktemp -d)"
           tar -xzf dist/*.tar.gz -C "$smoke"
-          bundle="$smoke/cc-remote-$RELEASE_ROLE-${GITHUB_REF_NAME}"
+          # The archive root is cc-remote-<role>-v<distribution_version> (the
+          # prefix deploy/build_release.py writes), NOT the ref name. On a
+          # manual dispatch from a slash branch (e.g. codex/release-hardening)
+          # GITHUB_REF_NAME contains a slash and can never equal the bundle
+          # root, so derive it from the canonical release metadata instead.
+          distribution_version="$(python -c "import json;print(json.load(open('deploy/release-metadata.json'))['distribution_version'])")"
+          bundle="$smoke/cc-remote-$RELEASE_ROLE-v${distribution_version}"
           test -x "$bundle/bin/uv"
           "$bundle/bin/uv" --version
           python_runtime="$(cat deploy/python-version.txt)"

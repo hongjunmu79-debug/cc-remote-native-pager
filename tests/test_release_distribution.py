@@ -606,3 +606,26 @@ def test_release_workflow_publish_is_tag_push_only():
     assert "gh release create" in body
     assert "gh release upload" in body
     assert "actions/attest" in body
+
+
+def test_release_smoke_bundle_root_derives_from_canonical_distribution_version():
+    # The Linux/macOS smoke step extracts dist/*.tar.gz and must address the
+    # bundle root as cc-remote-<role>-v<distribution_version> — exactly the
+    # prefix deploy/build_release.py writes. It must never use GITHUB_REF_NAME:
+    # on a manual dispatch from a slash branch (codex/release-hardening) the
+    # ref name contains a slash and can never be an archive root, which is why
+    # the smoke step of run 33097259865 failed.
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "cc-remote-$RELEASE_ROLE-${GITHUB_REF_NAME}" not in workflow
+    assert "cc-remote-$RELEASE_ROLE-v${distribution_version}" in workflow
+    assert (
+        "json.load(open('deploy/release-metadata.json'))['distribution_version']"
+        in workflow
+    )
+    # The archive root prefix the smoke addresses must line up with the bundle
+    # builder's prefix template for the same canonical metadata key.
+    assert "cc-remote-{role}-v{distribution_version}" in (
+        ROOT / "deploy" / "build_release.py"
+    ).read_text(encoding="utf-8")
