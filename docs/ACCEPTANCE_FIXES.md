@@ -1,4 +1,4 @@
-# ACCEPTANCE_FIXES.md — release-hardening round 2
+# ACCEPTANCE_FIXES.md — release-hardening rounds 2–3
 
 What was fixed in this round, the exact commands used to verify it, and the
 honest limitations of the local verification. Everything here is zero-token
@@ -6,6 +6,63 @@ unless stated otherwise.
 
 Branch: `codex/release-hardening`. No main merge, no tag, no release was
 created by this work.
+
+## Round 3: the acceptance-run CI failures, fixed
+
+The live CI run for the previous round's HEAD failed for exactly two root
+causes (Web and Android passed). This round fixes only those two; the security
+scanner and the metadata validator are not altered.
+
+### 3.1 Machine-identity literals removed from this document
+
+`docs/ACCEPTANCE_FIXES.md` still carried the build machine's username and an
+absolute Windows user-home path in the "Windows packaging pipeline" evidence
+paragraph. Those are now written with neutral, descriptive wording: the smoke
+gate in `win_smoke.py` deliberately guards against the builder's username, and
+the same payload passes when the smoke's temp root is outside a user home
+directory. No username, user-home path, or other machine-specific literal
+remains. The scanner (`deploy/release_scan.py`) and the validator
+(`deploy/validate_release_metadata.py`) are unchanged, and the gate's
+definition line in `win_smoke.py` keeps its existing allow-marker.
+
+Verified with the canonical gate and its tests:
+
+```
+python deploy/validate_release_metadata.py --root .    # passes, summary printed
+.venv\Scripts\python.exe -m pytest tests/test_release_metadata.py -q
+# => 14 passed
+```
+
+### 3.2 Windows CI installs the canonical runtime lock, not just pytest
+
+The `python-windows` job installed only `pytest`, but
+`test_release_distribution.py` imports `cc_remote.protocol`, which imports
+`typing_extensions` at module load — so collection aborted with
+`ModuleNotFoundError: typing_extensions` before any test ran. The job now
+mirrors the Ubuntu python job: `setup-uv` (same pinned action SHA and uv
+version) creates a `.venv`, `uv pip sync` installs the hash-verified universal
+`requirements.lock` (`--require-hashes --only-binary=:all:
+--no-binary=http-ece`), and `uv pip install -r requirements-dev.txt` adds the
+dev set. The selected tests run with `.venv\Scripts\python.exe`. No test file
+was modified to hide the collection failure.
+
+Verified in a clean-dependency-equivalent environment — a fresh uv venv on
+Python 3.11 with nothing installed beyond the canonical lock and the dev set.
+The `http-ece` sdist (pure Python, no wheel) builds from source on Windows,
+matching the Ubuntu job's behaviour:
+
+```
+.venv\Scripts\python.exe -m pytest `
+  tests/test_windows_packaging.py `
+  tests/test_windows_import_compat.py `
+  tests/test_release_metadata.py `
+  (the 10 Windows-compatible test_release_distribution.py node IDs shown in
+   the round-2 local verification block below) `
+  -q
+# => 99 passed
+```
+
+Both workflows still parse as valid YAML.
 
 ## 1. Windows distribution: two genuinely distinct deliverables
 
@@ -148,14 +205,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\build.ps1 
 
 Result: metadata validation passed, payload staged, uv bundled, and the
 clean-install smoke ran. The smoke **failed on the dev machine by design** —
-`FORBIDDEN_DEV_PATH_MARKERS` in `win_smoke.py` hardcodes this developer's
-username (`23715`), and the smoke renders a first-run config whose workspace
-lives under the dev's home temp dir, so a local build on this exact machine
-always trips the gate. The same payload passes when the smoke's temp root is
-neutral (not under `C:\Users\23715`), and CI's runner user is not `23715`, so
-the gate is exactly the "never ship a config with the builder's path" guard it
-is meant to be. The ISCC step then fails closed locally because Inno Setup is
-not installed on this machine.
+`FORBIDDEN_DEV_PATH_MARKERS` in `win_smoke.py` hardcodes the build machine's
+username, and the smoke renders a first-run config whose workspace lives under
+the builder's home temp directory, so a local build always trips the gate. The
+same payload passes when the smoke's temp root is neutral (outside a user home
+directory), and CI's runner user is not the developer's, so the gate is exactly
+the "never ship a config with the builder's path" guard it is meant to be. The
+ISCC step then fails closed locally because Inno Setup is not installed on this
+machine.
 
 Both archives were assembled from one staged payload (the two-invocation flow
 `build.ps1` uses), extracted, and their payloads smoke-verified:
