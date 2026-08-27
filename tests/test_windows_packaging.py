@@ -925,12 +925,19 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
     # build.ps1 runs under Set-StrictMode -Version 2.0, where `$path.Name` on a
     # string element of a foreach (the installer/portable archive paths) throws
     # PropertyNotFoundException — the real windows-2025 runner failed here (run
-    # 33097259865). The loop must use Split-Path -Leaf for both the status line
-    # and the .sha256 sidecar. Assert the script idiom and execute the exact
-    # foreach-under-StrictMode pattern on a real host.
+    # 33097259865). The loop must compute the leaf once into a scalar
+    # (Split-Path -Leaf $path), reject a non-scalar $path loudly, and write the
+    # .sha256 sidecar with an unambiguous braced interpolation. Assert the
+    # script idiom and execute the foreach-under-StrictMode pattern on a real
+    # host.
     script = _repo_packaging_script("build.ps1")
     assert "Set-StrictMode -Version 2.0" in script
-    assert "$path | Split-Path -Leaf" in script
+    assert "Split-Path -Leaf $path" in script
+    assert "${path}.sha256" in script
+    # Root-cause guard for the run-33120966288 failure: Invoke-ArchiveAssembly
+    # captures the subprocess stdout that used to leak into the return value.
+    assert "$buildOutput = & $python" in script
+    assert "$path -isnot [string]" in script
     # The buggy interpolation form ($($path.Name)) must be gone; the comment
     # above the loop may still mention the property name as documentation.
     assert "$($path.Name)" not in script
@@ -943,7 +950,7 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
             "$paths = @("
             "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64.zip', "
             "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64-portable.zip');"
-            "$leaves = foreach ($p in $paths) { $p | Split-Path -Leaf };"
+            "$leaves = foreach ($p in $paths) { Split-Path -Leaf $p };"
             "if ($leaves[0] -ne 'cc-remote-v3.0.0-pager.5-windows-x64.zip') "
             "{ throw 'leaf0 mismatch' };"
             "if ($leaves[1] -ne "
@@ -957,6 +964,188 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
     )
     assert probe.returncode == 0, probe.stderr
     assert "strict-mode split-path ok" in probe.stdout
+
+
+# ---------------------------------------------------------------------------
+# Archive-loop sidecar regressions (manual Release run 33120966288)
+# ---------------------------------------------------------------------------
+
+
+def _stage_distribution_for_ps1_cli(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
+    """Stage a real distribution payload and a minimal packaging tree so a
+    PowerShell probe can drive the real win_build.py CLI end to end."""
+    source = tmp_path / "source"
+    make_source_tree(source)
+    payload = tmp_path / "payload"
+    win_manifest.stage_payload(source, payload)
+    build_fake_distribution(payload)
+    packaging = tmp_path / "packaging"
+    (packaging / "windows").mkdir(parents=True, exist_ok=True)
+    (packaging / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
+    (packaging / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
+    (packaging / "windows" / "win_config.py").write_text("import json\n", encoding="utf-8")
+    setup = tmp_path / "setup.ps1"
+    setup.write_text("# setup\n", encoding="utf-8")
+    start_portable = tmp_path / "start-portable.ps1"
+    start_portable.write_text("# start-portable\n", encoding="utf-8")
+    readme = tmp_path / "README-portable.txt"
+    readme.write_text("# portable\n", encoding="utf-8")
+    return payload, packaging / "windows", setup, start_portable, readme
+
+
+_ARCHIVE_SIDECAR_PROBE = r"""
+param(
+    [string]$Python,
+    [string]$WinBuildPy,
+    [string]$Packaging,
+    [string]$Payload,
+    [string]$Setup,
+    [string]$StartPortable,
+    [string]$Readme,
+    [string]$OutputDir
+)
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = "Stop"
+# Import explicitly rather than rely on command autoloading: some dev machines
+# put a shim copy of the PowerShell modules ahead of the real ones in
+# PSModulePath, which breaks autoloading for Get-FileHash. This probe must run
+# identically on any host (the production build.ps1 needs no such import).
+Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
+New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+
+# Mirror of packaging\windows\build.ps1's Invoke-ArchiveAssembly: win_build.py
+# prints the assembled path on stdout, so the call MUST capture it. A leaked
+# stdout line made the return value a 2-element array and corrupted the
+# sidecar loop on the real runner (manual Release run 33120966288).
+function Invoke-ArchiveAssembly {
+    param([string]$Name, [string[]]$ExtraArgs)
+    $archivePath = Join-Path $OutputDir $Name
+    $buildOutput = & $Python $WinBuildPy `
+        --packaging $Packaging `
+        --payload $Payload `
+        --output $archivePath `
+        --source-date-epoch 0 `
+        --git-sha '0000000000000000000000000000000000000000' `
+        @ExtraArgs
+    if ($LASTEXITCODE -ne 0) { throw "archive assembly failed: $Name" }
+    return $archivePath
+}
+
+$installerArchivePath = Invoke-ArchiveAssembly `
+    -Name 'cc-remote-v3.0.0-pager.5-windows-x64.zip' `
+    -ExtraArgs @('--setup', $Setup)
+$portableArchivePath = Invoke-ArchiveAssembly `
+    -Name 'cc-remote-v3.0.0-pager.5-windows-x64-portable.zip' `
+    -ExtraArgs @('--portable', '--start-portable', $StartPortable, '--readme', $Readme)
+
+if (@($installerArchivePath).Count -ne 1) { throw "installer path is not a scalar (stdout leaked)" }
+if (@($portableArchivePath).Count -ne 1) { throw "portable path is not a scalar (stdout leaked)" }
+
+foreach ($path in @($installerArchivePath, $portableArchivePath)) {
+    if ($path -isnot [string]) { throw "archive path is not a scalar string: $path" }
+    $leaf = Split-Path -Leaf $path
+    $sha = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+    $size = (Get-Item $path).Length
+    if ($size -lt 1) { throw "archive is not a real file: $leaf" }
+    Set-Content -Path "${path}.sha256" -Value "$sha  $leaf" -Encoding ascii
+}
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+foreach ($path in @($installerArchivePath, $portableArchivePath)) {
+    $leaf = Split-Path -Leaf $path
+    $sidecar = "${path}.sha256"
+    if (-not (Test-Path $sidecar)) { throw "missing sidecar for $leaf" }
+    $expectedSha = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+    $content = (Get-Content -Path $sidecar -Raw).Trim()
+    if ($content -ne "$expectedSha  $leaf") { throw "sidecar content mismatch for ${leaf}: [$content]" }
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
+    try {
+        if ($zip.Entries.Count -le 0) { throw "archive is empty: $leaf" }
+        $names = @($zip.Entries | ForEach-Object { $_.FullName })
+        if ($leaf -like '*portable*') {
+            if ($names -notcontains 'start-portable.ps1') { throw "portable zip missing start-portable.ps1" }
+        } else {
+            if ($names -notcontains 'setup.ps1') { throw "installer zip missing setup.ps1" }
+        }
+    } finally {
+        $zip.Dispose()
+    }
+}
+Write-Output 'archive-loop ok'
+"""
+
+
+@pytest.mark.skipif(not sys.platform.startswith("win"), reason=_STRICT_MODE_STRING_PATHS_REASON)
+def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_path: Path):
+    # End-to-end regression for run 33120966288: the real win_build.py CLI
+    # prints the assembled path on stdout; Invoke-ArchiveAssembly must capture
+    # it (return a scalar), and the archive loop must write a correct
+    # "<sha256>  <leaf>" sidecar next to each real, non-empty zip with the
+    # expected root entry. The probe mirrors build.ps1 and runs under
+    # Set-StrictMode.
+    payload, packaging, setup, start_portable, readme = _stage_distribution_for_ps1_cli(tmp_path)
+    probe = tmp_path / "archive-sidecar-probe.ps1"
+    probe.write_text(_ARCHIVE_SIDECAR_PROBE, encoding="utf-8")
+    output_dir = tmp_path / "out"
+    repo_root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", str(probe),
+            "-Python", sys.executable,
+            "-WinBuildPy", str(repo_root / "packaging/windows/win_build.py"),
+            "-Packaging", str(packaging),
+            "-Payload", str(payload),
+            "-Setup", str(setup),
+            "-StartPortable", str(start_portable),
+            "-Readme", str(readme),
+            "-OutputDir", str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "archive-loop ok" in proc.stdout
+    zips = sorted(p.name for p in output_dir.glob("*.zip"))
+    assert zips == [
+        "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip",
+        "cc-remote-v3.0.0-pager.5-windows-x64.zip",
+    ]
+    for zip_name in zips:
+        assert (output_dir / f"{zip_name}.sha256").is_file()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("win"), reason=_STRICT_MODE_STRING_PATHS_REASON)
+def test_build_ps1_archive_loop_rejects_contaminated_path_array():
+    # Defense-in-depth: if a subprocess stdout line ever leaks into a caller's
+    # return value again, $path arrives as a 2-element array and the loop must
+    # fail loudly instead of writing the bogus ADS path the CI run produced.
+    script = _repo_packaging_script("build.ps1")
+    assert "if ($path -isnot [string])" in script
+
+    probe = subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "Set-StrictMode -Version 2.0;"
+            "$ErrorActionPreference = 'Stop';"
+            "$contaminated = @('C:\\out\\a.zip', 'C:\\out\\a.zip');"
+            "$rejected = $false;"
+            "foreach ($path in @($contaminated, 'C:\\out\\b.zip')) {"
+            "  try {"
+            "    if ($path -isnot [string]) "
+            "      { throw \"archive path is not a scalar string: $path\" }"
+            "  } catch { $rejected = $true }"
+            "};"
+            "if (-not $rejected) { throw 'contaminated array was accepted' };"
+            "Write-Output 'contamination guard ok'",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert "contamination guard ok" in probe.stdout
 
 
 # ---------------------------------------------------------------------------

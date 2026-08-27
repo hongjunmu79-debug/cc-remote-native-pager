@@ -1,4 +1,4 @@
-# ACCEPTANCE_FIXES.md — release-hardening rounds 2–3, 6
+# ACCEPTANCE_FIXES.md — release-hardening rounds 2–3, 6–7
 
 What was fixed in this round, the exact commands used to verify it, and the
 honest limitations of the local verification. Everything here is zero-token
@@ -6,6 +6,96 @@ unless stated otherwise.
 
 Branch: `codex/release-hardening`. No main merge, no tag, no release was
 created by this work.
+
+## Round 7: manual Release run — build.ps1 archive-loop stdout contamination
+
+The failed manual Release `workflow_dispatch` (GitHub run 33120966288, Windows
+job 98687706697) exposed a PowerShell subprocess-stdout bug in
+`packaging\windows\build.ps1`'s archive loop. The built/hash lines duplicated,
+`(Get-Item $path).Length` reported `2` instead of the file size, and
+`Set-Content` failed trying to open an alternate data stream of a file whose
+name ended in `zip D`.
+
+### 7.1 Root cause: win_build.py stdout leaked into a function's return value
+
+`win_build.py` prints the assembled archive path on stdout
+(`print(archive.path)` in `main()`). `Invoke-ArchiveAssembly` invoked it with
+`& $python …` and did not capture stdout, so the printed path flowed into the
+function's output stream; `return $archivePath` then returned a **2-element
+array** (the scalar path plus the leaked stdout line). The archive loop then
+received an array as `$path`:
+
+- `"$path | Split-Path -Leaf"` on a 2-element array printed both leaves, and
+  `(Get-Item $path).Length` returned the array's element count — the real log
+  shows the leaf and the SHA256 twice and the count as `(2 bytes)`:
+  ```
+  [cc-remote] Built cc-remote-v3.0.0-pager.5-windows-x64.zip cc-remote-v3.0.0-pager.5-windows-x64.zip (2 bytes)
+  [cc-remote] SHA256 ee55585baa… ee55585baa…
+  ```
+- `Set-Content -Path "$path.sha256"` interpolated the array into one string
+  with a space (`D:\…\…zip D:\…\…zip.sha256`), which the path parser split at
+  the second colon into an alternate data stream: base file
+  `…\cc-remote-v3.0.0-pager.5-windows-x64.zip D`, stream `…zip.sha256`. The
+  base file does not exist, so `Set-Content` threw `FileNotFoundException`:
+  ```
+  Set-Content : Could not open the alternate data stream 'D:\a\cc-remote-native-pager\cc-remote-native-pager\dist\cc-remote-v3.0.0-pager.5-windows-x64.zip.sha256' of the file 'D:\a\cc-remote-native-pager\cc-remote-native-pager\dist\cc-remote-v3.0.0-pager.5-windows-x64.zip D'.
+  ```
+  The `(2 bytes)` was therefore the array count, **not** a broken 2-byte zip:
+  the archives themselves were real and correctly hashed; only the status/hash
+  sidecar loop was corrupted.
+
+### 7.2 Fix in packaging\windows\build.ps1
+
+- `Invoke-ArchiveAssembly` now captures the subprocess stdout
+  (`$buildOutput = & $python …`), logs it via `Write-Step`, and returns the
+  scalar `$archivePath` — no output can leak into the return value.
+- The archive loop guards `$path -isnot [string]` (fails loudly rather than
+  corrupting the sidecar if contamination ever recurs), computes the leaf once
+  into a scalar (`$leaf = Split-Path -Leaf $path`), and writes the sidecar with
+  an unambiguous braced interpolation (`"${path}.sha256"`). The installer
+  `.exe` block uses the same explicit-leaf idiom. Both zips keep their real
+  `.sha256` sidecars, and the genuine Inno `.exe` contract is untouched.
+
+### 7.3 Regression coverage (executable, not static-only)
+
+- `test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars` —
+  drives the real `win_build.py` CLI from a PowerShell probe that mirrors
+  `Invoke-ArchiveAssembly` under `Set-StrictMode -Version 2.0`, then validates
+  each zip is a scalar path, a real non-empty archive, carries the expected
+  root entry (`setup.ps1` / `start-portable.ps1`), and that each `.sha256`
+  sidecar contains exactly `<sha256>  <leaf>`.
+- `test_build_ps1_archive_loop_rejects_contaminated_path_array` — proves the
+  scalar guard throws for a contaminated 2-element array.
+- `test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode` —
+  updated to assert the new idiom (captured build output, scalar guard, braced
+  interpolation) and execute the foreach-under-StrictMode pattern on a real
+  host.
+- The probe imports `Microsoft.PowerShell.Utility` explicitly so it runs
+  identically on dev machines whose `PSModulePath` shims a copy of the modules
+  and breaks command autoloading; production `build.ps1` needs no such import.
+
+### Verification (exact commands and results)
+
+```
+.venv\Scripts\python.exe -m pytest `
+  tests/test_windows_packaging.py `
+  tests/test_windows_import_compat.py `
+  tests/test_release_metadata.py `
+  <the 12 curated test_release_distribution.py node IDs> -q
+# => 103 passed (incl. the three build.ps1 archive-loop regressions)
+uvx --from ruff==0.15.13 ruff check cc_remote tests deploy   # All checks passed
+git diff --check                                              # clean
+```
+
+### Honest limitations
+
+- The full three-artifact `build.ps1` run (including the ISCC-compiled `.exe`)
+  still happens on the windows-2025 CI runner; the regression probes exercise
+  the archive-loop path end to end here with the real `win_build.py` CLI and
+  real zips/sidecars.
+- The sidecar hash in the failing run (`ee55585baa…`) proves the archives were
+  valid; the defect was confined to the status/hash sidecar loop, and the fix
+  preserves the two-zips-plus-exe artifact contract.
 
 ## Round 6: bundle-root derivation, strict-mode string paths, endpoint canonicalization, stale docs
 

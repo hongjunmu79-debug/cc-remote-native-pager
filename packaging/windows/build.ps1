@@ -127,7 +127,12 @@ function Invoke-ArchiveAssembly {
     param([string]$Name, [string[]]$ExtraArgs)
     $archivePath = Join-Path $outputDir $Name
     Write-Step "Assembling $Name (SOURCE_DATE_EPOCH=$SourceDateEpoch)"
-    & $python (Join-Path $PSScriptRoot "win_build.py") `
+    # win_build.py prints the assembled archive path on stdout; capture it so
+    # that output cannot leak into this function's return value. A leaked
+    # stdout line turned $archivePath into a 2-element array and corrupted the
+    # archive loop below (manual Release run 33120966288) — see
+    # docs/ACCEPTANCE_FIXES.md.
+    $buildOutput = & $python (Join-Path $PSScriptRoot "win_build.py") `
         --packaging (Join-Path $stagePackaging "windows") `
         --packaging-init (Join-Path $stagePackaging "__init__.py") `
         --payload $payload `
@@ -136,6 +141,7 @@ function Invoke-ArchiveAssembly {
         --git-sha $GitSha `
         @ExtraArgs
     if ($LASTEXITCODE -ne 0) { throw "archive assembly failed: $Name" }
+    if ($buildOutput) { Write-Step $buildOutput }
     return $archivePath
 }
 
@@ -151,16 +157,23 @@ $portableArchivePath = Invoke-ArchiveAssembly -Name $portableArchiveName `
         "--readme", (Join-Path $stagePackaging "windows\README-portable.txt")
     )
 
-# $path here is a plain string (an archive path), and this script runs under
-# Set-StrictMode -Version 2.0, where $path.Name on a string throws
-# PropertyNotFoundException. Use Split-Path -Leaf for the display name and the
-# sha256 sidecar, exactly like the installer .exe block below.
+# Each $path must be a plain scalar string. Guard against a subprocess stdout
+# line leaking into a caller's return value — the exact CI failure, where
+# $path became a 2-element array, the status line duplicated the leaf and hash,
+# (Get-Item $path).Length reported the array count instead of the file size,
+# and Set-Content -Path "$path.sha256" was parsed as an alternate data stream.
+# Fail loudly rather than corrupt the sidecar. The leaf is computed once into a
+# scalar so the interpolation is unambiguous.
 foreach ($path in @($installerArchivePath, $portableArchivePath)) {
+    if ($path -isnot [string]) {
+        throw "archive path is not a scalar string: $path"
+    }
+    $leaf = Split-Path -Leaf $path
     $sha = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
     $size = (Get-Item $path).Length
-    Write-Step "Built $($path | Split-Path -Leaf) ($size bytes)"
+    Write-Step "Built $leaf ($size bytes)"
     Write-Step "SHA256 $sha"
-    Set-Content -Path "$path.sha256" -Value "$sha  $($path | Split-Path -Leaf)" -Encoding ascii
+    Set-Content -Path "${path}.sha256" -Value "$sha  $leaf" -Encoding ascii
 }
 
 # --- Compile the real installer (.exe) with Inno Setup ------------------------
@@ -173,11 +186,12 @@ Write-Step "Compiling the installer executable"
     -OutputDir $outputDir
 if ($LASTEXITCODE -ne 0) { throw "installer compilation failed" }
 $setupExe = Join-Path $outputDir "cc-remote-v$distributionVersion-windows-x64-setup.exe"
+$leaf = Split-Path -Leaf $setupExe
 $sha = (Get-FileHash -Algorithm SHA256 -Path $setupExe).Hash.ToLowerInvariant()
 $size = (Get-Item $setupExe).Length
-Write-Step "Built $($setupExe | Split-Path -Leaf) ($size bytes)"
+Write-Step "Built $leaf ($size bytes)"
 Write-Step "SHA256 $sha"
-Set-Content -Path "$setupExe.sha256" -Value "$sha  $($setupExe | Split-Path -Leaf)" -Encoding ascii
+Set-Content -Path "${setupExe}.sha256" -Value "$sha  $leaf" -Encoding ascii
 
 Write-Step "Done: $installerArchivePath, $portableArchivePath, $setupExe"
 exit 0
