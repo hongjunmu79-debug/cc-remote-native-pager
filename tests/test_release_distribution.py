@@ -20,7 +20,7 @@ from deploy.release_manifest import (
     ReleaseManifestError,
     validate_release_directory,
 )
-from deploy.release_metadata import load_release_metadata
+from deploy.release_metadata import ReleaseMetadataError, load_release_metadata
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -471,7 +471,13 @@ def test_role_locks_and_release_workflow_are_versioned_inputs():
         encoding="utf-8"
     )
     assert "tags:" in workflow
-    assert "v*.*.*" in workflow
+    # Only pre-release-shaped distribution tags (v3.0.0-pager.5) are trigger
+    # patterns. The bare product tag (v3.0.0) must never be a release tag, so
+    # it is absent from the trigger list entirely; the verify job additionally
+    # enforces the exact canonical tag from deploy/release-metadata.json.
+    assert '"v*.*.*-*"' in workflow
+    assert '"v*.*.*"' not in workflow
+    assert "verify_release_tag" in workflow
     assert "npm --prefix web run build" in workflow
     assert "pytest" in workflow
     assert "test:reliability" in workflow
@@ -506,3 +512,97 @@ def test_release_locks_keep_intel_macos_cryptography_wheel():
         "requirements-wrapper.lock",
     ):
         assert compatible_pin in (ROOT / name).read_text()
+
+
+def test_release_metadata_android_signer_sha256_is_validated(tmp_path: Path):
+    # The canonical APK signer fingerprint is the exact value release.yml
+    # verifies against before an APK can be uploaded or published. It must be
+    # present and well-formed, and a malformed value must be rejected so a
+    # wrong/absent fingerprint can never be substituted for the real key.
+    metadata = load_release_metadata(ROOT / "deploy" / "release-metadata.json")
+    assert re.fullmatch(r"[0-9a-f]{64}", metadata.android.signer_sha256) is not None
+    assert len(metadata.android.signer_sha256) == 64
+
+    source = json.loads((ROOT / "deploy" / "release-metadata.json").read_text())
+    for bad_value in ("not-a-sha", "61B478BD872761FDB65425196B6158CB175A3E102F89FA31BBD57D3DC47BAFCD", ""):
+        source["android"]["signer_sha256"] = bad_value
+        bad = tmp_path / "release-metadata.json"
+        bad.write_text(json.dumps(source), encoding="utf-8")
+        with pytest.raises(ReleaseMetadataError, match="signer_sha256"):
+            load_release_metadata(bad)
+
+
+def test_release_tag_contract_accepts_only_canonical_distribution_tag():
+    # release.yml's verify job delegates to deploy/tag_contract.py, so this
+    # test exercises the exact code a tag push runs: the canonical
+    # distribution tag is accepted, the bare product tag and anything else is
+    # rejected before any build or publish can happen.
+    from deploy.tag_contract import (
+        TagContractError,
+        canonical_distribution_tag,
+        verify_release_tag,
+    )
+
+    expected = canonical_distribution_tag(ROOT)
+    assert expected == f"v{DISTRIBUTION_VERSION}"
+    assert verify_release_tag(expected, ROOT) == expected
+
+    product = (
+        f"v{load_release_metadata(ROOT / 'deploy' / 'release-metadata.json').product_version}"
+    )
+    assert product != expected
+    for tag in (product, "v9.9.9", "v3.0.0-pager.6", "3.0.0-pager.5", ""):
+        with pytest.raises(TagContractError, match="canonical distribution tag"):
+            verify_release_tag(tag, ROOT)
+
+
+def test_release_workflow_android_signing_is_fail_closed():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    # A tag push must fail immediately when either signing secret is absent;
+    # the `secrets` context is not available in `if:` conditions, so the shell
+    # guard decides and the GITHUB_EVENT_NAME env var tells it a push from a
+    # manual validation run.
+    assert "Configure release signing from secrets" in workflow
+    assert (
+        'if [ -z "$PAGER_KEYSTORE_B64" ] || [ -z "$PAGER_SIGNING_PROPERTIES" ]; then'
+        in workflow
+    )
+    assert 'if [ "$GITHUB_EVENT_NAME" = "push" ]; then' in workflow
+    assert "refusing to build an unsigned release APK" in workflow
+
+    # The assembled APK must be checked against the canonical signer before it
+    # can be uploaded, and only on tag pushes (an unsigned manual build has no
+    # publish path). The expected fingerprint comes from the same canonical
+    # metadata file the loader validates.
+    assert "Verify release APK signer fingerprint" in workflow
+    assert "if: github.event_name == 'push'" in workflow
+    assert "apksigner" in workflow
+    assert "signer_sha256" in workflow
+    assert "SHA-256 digest" in workflow
+    assert "refusing to upload" in workflow
+    # The signer fingerprint check never needs the keystore bytes: only the
+    # published public fingerprint is compared, so no signing material appears
+    # in the verification step.
+    verify, _, _ = workflow.partition("Verify release APK signer fingerprint")
+    assert "PAGER_KEYSTORE_B64" in verify
+    verify_body = workflow.partition("Verify release APK signer fingerprint")[2]
+    assert "PAGER_KEYSTORE_B64" not in verify_body
+
+
+def test_release_workflow_publish_is_tag_push_only():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    # A safe manual validation path exists, but publication must stay
+    # tag-push-only.
+    assert "workflow_dispatch:" in workflow
+
+    publish, _, body = workflow.partition("\n  publish:\n")
+    assert body
+    assert "if: github.event_name == 'push'" in body
+    assert "gh release create" in body
+    assert "gh release upload" in body
+    assert "actions/attest" in body

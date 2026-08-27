@@ -34,6 +34,7 @@ _DISTRIBUTION_VERSION_RE = re.compile(
 _OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?$")
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 _APPLICATION_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -46,6 +47,7 @@ class AndroidMetadata:
     application_id: str
     version_name: str
     version_code: int
+    signer_sha256: str
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,7 @@ def load_release_metadata(path: Path | str) -> ReleaseMetadata:
     application_id = android.get("application_id") if isinstance(android, dict) else None
     version_name = android.get("version_name") if isinstance(android, dict) else None
     version_code = android.get("version_code") if isinstance(android, dict) else None
+    signer_sha256 = android.get("signer_sha256") if isinstance(android, dict) else None
     _require(
         isinstance(application_id, str)
         and _APPLICATION_ID_RE.fullmatch(application_id) is not None,
@@ -146,6 +149,14 @@ def load_release_metadata(path: Path | str) -> ReleaseMetadata:
         and version_code > 0,
         "android.version_code must be a positive integer",
     )
+    # The APK signer's certificate SHA-256 digest, in the same form apksigner
+    # prints it. This is the exact fingerprint release.yml verifies before the
+    # APK can be uploaded or published; a wrong fingerprint must never be
+    # substituted for the real key.
+    _require(
+        isinstance(signer_sha256, str) and _SHA256_HEX_RE.fullmatch(signer_sha256) is not None,
+        "android.signer_sha256 must be a 64-character lowercase hex SHA-256 digest",
+    )
 
     return ReleaseMetadata(
         schema=schema,
@@ -157,6 +168,7 @@ def load_release_metadata(path: Path | str) -> ReleaseMetadata:
             application_id=application_id,
             version_name=version_name,
             version_code=version_code,
+            signer_sha256=signer_sha256,
         ),
     )
 

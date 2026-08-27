@@ -10,6 +10,7 @@
   "android": {
     "application_id": "dev.ccremote.lan",
     "version_name": "3.0.0-pager.5",
-    "version_code": 30014
+    "version_code": 30014,
+    "signer_sha256": "61b478bd872761fdb65425196b6158cb175a3e102f89fa31bbd57d3dc47bafcd"
   }
 }

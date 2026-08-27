@@ -20,7 +20,6 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import dev.ccremote.pager.BuildConfig
 import dev.ccremote.pager.data.ServerEndpoint
-import dev.ccremote.pager.data.isPrivateOrLocalIpLiteral
 import org.json.JSONObject
 
 class SecureWebViewController(
@@ -160,9 +159,26 @@ class SecureWebViewController(
                 view: WebView,
                 request: WebResourceRequest,
             ): Boolean {
-                if (isAllowedNavigation(request.url)) return false
-                runCatching {
-                    activity.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                val current = endpoint
+                if (current != null && OriginPolicy.isSameOrigin(
+                        current,
+                        request.url.scheme,
+                        request.url.host,
+                        request.url.port,
+                    )
+                ) {
+                    // Same-origin navigation (including the initial load and
+                    // same-origin redirects) stays inside the one WebView.
+                    return false
+                }
+                // Off-origin and scheme-less targets never load in the WebView,
+                // so they can never reach the native bridge. Only safe web
+                // schemes may open in the system browser; arbitrary schemes
+                // (javascript:, intent:, file:, ...) are dropped entirely.
+                if (OriginPolicy.isSafeExternalScheme(request.url.scheme)) {
+                    runCatching {
+                        activity.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                    }
                 }
                 return true
             }
@@ -171,16 +187,26 @@ class SecureWebViewController(
                 view: WebView,
                 request: WebResourceRequest,
             ): WebResourceResponse? {
-                // WebView-level enforcement of the cleartext policy: every
-                // resource load (including subresources) must be HTTPS or a
-                // private/local HTTP IP. Public HTTP and unknown schemes are
-                // blocked here even if some script tries to load them.
-                if (!isAllowedResource(request.url)) {
+                // WebView-level exact-origin enforcement: the endpoint origin is
+                // the only trust boundary. Every resource load (main frame and
+                // subresources) must match the selected endpoint's exact origin
+                // — scheme, normalized host, and effective port. Off-origin
+                // HTTPS, off-origin private HTTP, redirects that leave the
+                // origin, and unknown schemes are all rejected here even if a
+                // script tries to fetch them.
+                val current = endpoint
+                if (current == null || !OriginPolicy.isSameOrigin(
+                        current,
+                        request.url.scheme,
+                        request.url.host,
+                        request.url.port,
+                    )
+                ) {
                     return WebResourceResponse(
                         "text/plain",
                         "utf-8",
                         403,
-                        "Blocked by cc-remote cleartext policy",
+                        "Blocked by cc-remote origin policy",
                         emptyMap(),
                         null,
                     )
@@ -227,31 +253,6 @@ class SecureWebViewController(
             bridgeInstalled = true
         } else {
             onPageProblem("Android System WebView 版本过低，请更新后重试")
-        }
-    }
-
-    private fun isAllowedNavigation(uri: Uri): Boolean {
-        val current = endpoint ?: return false
-        val port = when {
-            uri.port != -1 -> uri.port
-            uri.scheme == "https" -> 443
-            else -> 80
-        }
-        val targetOrigin = buildString {
-            append(uri.scheme)
-            append("://")
-            append(uri.host)
-            val defaultPort = if (uri.scheme == "https") 443 else 80
-            if (port != defaultPort) append(":$port")
-        }
-        return targetOrigin == current.origin
-    }
-
-    private fun isAllowedResource(uri: Uri): Boolean {
-        when (uri.scheme) {
-            "https" -> return true
-            "http" -> return isPrivateOrLocalIpLiteral(uri.host)
-            else -> return false
         }
     }
 
