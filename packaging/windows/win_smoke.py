@@ -194,8 +194,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.temp is not None:
         # An explicit --temp is caller-owned: it is used verbatim and never
-        # deleted, so a caller can reuse one root across invocations and manage
-        # its lifecycle itself.
+        # deleted, so the caller can keep the install/upgrade trees for
+        # inspection. It must be empty each run — the smoke stages a second
+        # copy into <temp>/upgrade via copytree, which refuses to overwrite a
+        # tree left by a prior run (the collision the default mkdtemp path
+        # below avoids).
         temp_root = args.temp
         temp_root.mkdir(parents=True, exist_ok=True)
         problems = run_clean_install_smoke(args.check, temp_root)

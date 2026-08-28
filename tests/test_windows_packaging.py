@@ -705,7 +705,9 @@ def test_smoke_cli_explicit_temp_is_preserved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     # An explicit --temp is caller-owned: the smoke runs inside it and it is
-    # NOT deleted on exit, so a caller can reuse one root across invocations.
+    # NOT deleted on exit, so the caller can inspect the kept install/upgrade
+    # trees. Reusing the root across runs is not supported — the upgrade copy
+    # would collide with the prior run's tree (see run_clean_install_smoke).
     dist = make_distribution(tmp_path / "dist")
     monkeypatch.setattr(
         win_smoke,
