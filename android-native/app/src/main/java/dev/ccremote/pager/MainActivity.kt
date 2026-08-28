@@ -31,7 +31,7 @@ import dev.ccremote.pager.feedback.PagerFeedbackController
 import dev.ccremote.pager.ui.CCRemotePagerTheme
 import dev.ccremote.pager.ui.PagerDashboardRoot
 import dev.ccremote.pager.web.SecureWebViewController
-import dev.ccremote.pager.web.ImeInsetsController
+import dev.ccremote.pager.web.WebViewInsetsController
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -40,7 +40,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<PagerViewModel>()
     private lateinit var webController: SecureWebViewController
     private lateinit var feedbackController: PagerFeedbackController
-    private lateinit var imeInsetsController: ImeInsetsController
+    private lateinit var webViewInsetsController: WebViewInsetsController
     private lateinit var dashboardView: ComposeView
     private lateinit var backToDashboard: OnBackPressedCallback
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
@@ -77,6 +77,13 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra(EXTRA_OPEN_TASK_ID)?.let(viewModel::openTaskWhenAvailable)
 
         val root = FrameLayout(this).apply {
+            // Behind the transparent edge-to-edge system bars, the strips the
+            // WebView no longer covers (status bar, nav bar, cutouts) show this
+            // background. Match the Compose theme so the strips stay readable
+            // in both light and dark modes.
+            setBackgroundColor(
+                ContextCompat.getColor(this@MainActivity, R.color.pager_window_background),
+            )
             addView(
                 webController.webView,
                 FrameLayout.LayoutParams(
@@ -98,7 +105,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         setContentView(root)
-        imeInsetsController = ImeInsetsController(webController.webView).also { it.install() }
+        webViewInsetsController = WebViewInsetsController(webController.webView).also { it.install() }
 
         backToDashboard = object : OnBackPressedCallback(false) {
             override fun handleOnBackPressed() = viewModel.showDashboard()
@@ -183,7 +190,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         pendingFileCallback?.onReceiveValue(null)
         pendingFileCallback = null
-        if (::imeInsetsController.isInitialized) imeInsetsController.clear()
+        if (::webViewInsetsController.isInitialized) webViewInsetsController.clear()
         if (::webController.isInitialized) webController.destroy()
         if (::feedbackController.isInitialized) feedbackController.close()
         super.onDestroy()

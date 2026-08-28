@@ -1,0 +1,7 @@
+<resources>
+    <!-- Window background behind the transparent edge-to-edge system bars.
+         Matches the Compose pager's light background so the strips the inset
+         WebView no longer covers stay readable. The night override is in
+         values-night/colors.xml. -->
+    <color name="pager_window_background">#F4F7F8</color>
+</resources>

@@ -73,6 +73,27 @@ existing `RelayWs` instance. The APK does not hold relay credentials.
 - Native state is a projection only. Reloading the page rebuilds it from the
   authoritative web reducer.
 
+## Edge-to-edge inset handling
+
+`MainActivity` runs `enableEdgeToEdge()`, so the Compose dashboard draws edge to
+edge and applies its own insets. The legacy CHAT WebView is a full-bleed sibling
+under that same window, so without intervention its page renders beneath the
+status bar, navigation bar, and display cutout — on a Huawei Android 12 device
+the web client's top-right theme button overlaps the battery icons.
+
+`WebViewInsetsController` is the WebView's single owner of window-inset handling.
+It installs the only `OnApplyWindowInsetsListener` and a
+`DISPATCH_MODE_CONTINUE_ON_SUBTREE` animation callback, then turns the merged
+`systemBars()` + `displayCutout()` insets into the WebView's layout margins,
+lifting the bottom edge by the `ime()` inset while the keyboard is visible. The
+listener passes insets through unchanged, so the WebView subtree still receives
+them downstream and IME/visual-viewport behaviour is preserved. The margin
+merge lives in a pure, unit-tested function (`webViewInsets`) so device and
+orientation maths are not coupled to the view. The `FrameLayout` root behind the
+WebView is tinted `pager_window_background` (light `#F4F7F8` / dark `#090D12`,
+matching the Compose theme), so the strips the inset WebView no longer covers
+stay readable in both modes.
+
 ## Licensing
 
 The implementation is original MIT-licensed code. AgentPager source, assets,

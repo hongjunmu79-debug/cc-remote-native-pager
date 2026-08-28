@@ -1,0 +1,5 @@
+<resources>
+    <!-- Night-mode override of pager_window_background; matches the Compose
+         pager's dark background (#090D12). -->
+    <color name="pager_window_background">#090D12</color>
+</resources>

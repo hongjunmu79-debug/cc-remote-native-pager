@@ -49,3 +49,42 @@
 - Old Android System WebView compatibility.
 - Android Back returns from chat to the native dashboard (with standard IME
   dismissal taking precedence while the keyboard owns Back).
+- Chat renders inside the dynamic status-bar, navigation-bar, and
+  display-cutout safe insets in both orientations and in light/dark mode, and
+  the composer stays above the IME.
+
+## ADB manual check: chat safe insets
+
+The chat WebView must never draw under the system bars or the display cutout.
+The objective part of the check is below; the rest is visual confirmation on the
+device.
+
+```text
+# 1. Build and install the debug APK, then launch chat
+cd android-native
+gradlew.bat assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n dev.ccremote.lan.debug/dev.ccremote.pager.MainActivity
+
+# 2. Prove the device reports a cutout (Huawei notch / punch hole). The
+#    dumpsys line names the cutout geometry the app must respect.
+adb shell dumpsys window displays | grep -i cutout
+
+# 3. Portrait: the web client's top-right theme button must sit BELOW the
+#    status bar (not under the battery icons), and the composer must sit ABOVE
+#    the navigation bar.
+
+# 4. Landscape: lock rotation and rotate; content must clear any left/right
+#    cutout and the landscape navigation bar.
+adb shell settings put system accelerometer_rotation 0
+adb shell settings put system user_rotation 1    # 90 degrees
+adb shell settings put system user_rotation 0    # back to portrait
+
+# 5. IME: tap the composer so the keyboard shows. The WebView bottom edge must
+#    lift above the keyboard and restore when it dismisses.
+```
+
+For devices without a physical cutout, enable Developer options → "Simulate a
+display with a cutout" and repeat steps 3–5. The pure margin maths (`webViewInsets`
+and `effectiveImeBottom`) is additionally covered by JVM unit tests, so the ADB
+check is a smoke confirmation of the wiring, not the arithmetic.
