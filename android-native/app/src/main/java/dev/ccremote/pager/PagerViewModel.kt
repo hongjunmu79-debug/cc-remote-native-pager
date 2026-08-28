@@ -26,11 +26,27 @@ import kotlinx.coroutines.launch
 
 enum class PagerScreen {
     CHAT,
-    DASHBOARD,
+    DASHBOARD;
+
+    companion object {
+        /** The screen a session with no explicit navigation yet lands on. With
+         *  no server endpoint the WebView has nothing to load, so a fresh
+         *  install must land on the dashboard — whose first-launch effect opens
+         *  the settings dialog — instead of a blank page. */
+        fun initialFor(endpoint: ServerEndpoint?): PagerScreen =
+            if (endpoint == null) DASHBOARD else CHAT
+    }
 }
 
+/** Resolves the screen to display: an explicit navigation wins; otherwise the
+ *  endpoint-derived first-launch default applies. */
+internal fun resolveScreen(
+    currentScreen: PagerScreen?,
+    endpoint: ServerEndpoint?,
+): PagerScreen = currentScreen ?: PagerScreen.initialFor(endpoint)
+
 data class PagerUiState(
-    val screen: PagerScreen = PagerScreen.CHAT,
+    val screen: PagerScreen,
     val tasks: List<PagerTask> = emptyList(),
     val focusedTaskId: String? = null,
     val bridgeConnected: Boolean = false,
@@ -38,6 +54,7 @@ data class PagerUiState(
     val machineId: String = "",
     val endpoint: ServerEndpoint? = null,
     val feedbackEnabled: Boolean = true,
+    val preferencesLoaded: Boolean = false,
 )
 
 sealed interface PagerUiEvent {
@@ -48,7 +65,10 @@ sealed interface PagerUiEvent {
 class PagerViewModel(application: Application) : AndroidViewModel(application) {
     val bridge = NativeBridgeRepository(elapsedRealtime = SystemClock::elapsedRealtime)
     private val preferences = AppPreferences(application.applicationContext)
-    private val screen = MutableStateFlow(PagerScreen.CHAT)
+    // Null until the first explicit navigation: the effective screen is resolved
+    // from the configured endpoint, so a fresh install (no endpoint) lands on the
+    // dashboard instead of a blank WebView.
+    private val screen = MutableStateFlow<PagerScreen?>(null)
     private var automaticDashboardShown = false
     private val pendingCommands = linkedMapOf<String, PendingCommand>()
     private var pendingOpenTaskId: String? = null
@@ -79,7 +99,7 @@ class PagerViewModel(application: Application) : AndroidViewModel(application) {
                 && preferenceState.seenRevisions[task.id] != revision)
         }.sortedWith(TASK_COMPARATOR)
         PagerUiState(
-            screen = currentScreen,
+            screen = resolveScreen(currentScreen, preferenceState.endpoint),
             tasks = tasks,
             focusedTaskId = snapshot?.focusedTaskId,
             bridgeConnected = bridgeState.lastFrameAtElapsed?.let {
@@ -89,11 +109,15 @@ class PagerViewModel(application: Application) : AndroidViewModel(application) {
             machineId = snapshot?.machineId.orEmpty(),
             endpoint = preferenceState.endpoint,
             feedbackEnabled = preferenceState.feedbackEnabled,
+            preferencesLoaded = true,
         )
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
-        PagerUiState(),
+        // Placeholder for the instant before preferences load; the build-time
+        // default is the only endpoint signal available synchronously, and it is
+        // enough to pick the right screen for a true first launch.
+        PagerUiState(screen = PagerScreen.initialFor(ServerEndpoint.Default)),
     )
 
     init {

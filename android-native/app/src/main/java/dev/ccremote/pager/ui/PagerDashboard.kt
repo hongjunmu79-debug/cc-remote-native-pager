@@ -80,10 +80,13 @@ fun PagerDashboard(
         if (visibleTasks.isNotEmpty()) listState.scrollToItem(0)
     }
 
-    // First-launch entry: no server endpoint configured (the build ships no
-    // default), so open the setup dialog once until the user saves an address.
-    LaunchedEffect(state.endpoint) {
-        if (state.endpoint == null && !autoRequestedSetup) {
+    // First-launch entry: once preferences have loaded with no server endpoint
+    // configured (the build ships no default), open the setup dialog once until
+    // the user saves an address. Guarded on preferencesLoaded so the placeholder
+    // state (endpoint == null before DataStore emits) cannot latch the dialog
+    // for a returning user who already has an endpoint configured.
+    LaunchedEffect(state.endpoint, state.preferencesLoaded) {
+        if (state.preferencesLoaded && state.endpoint == null && !autoRequestedSetup) {
             autoRequestedSetup = true
             settingsOpen = true
         }

@@ -23,6 +23,11 @@ data class PagerPreferences(
     val feedbackEnabled: Boolean,
 )
 
+// Kotlin 2.0.20+ warns that the private primary constructor is exposed via the
+// generated public copy(); future releases change copy() to match the
+// constructor's visibility. Opt in to that behavior now — copy() is never used
+// outside the class, so it becomes private with no callers to update.
+@ConsistentCopyVisibility
 data class ServerEndpoint private constructor(
     val url: String,
     val origin: String,
