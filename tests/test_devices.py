@@ -33,6 +33,13 @@ def _cfg(tmp_path, **overrides) -> RelayConfig:
     return RelayConfig(**values)
 
 
+@pytest.fixture(autouse=True)
+def _clear_login_rate_limit() -> None:
+    server._login_limiter.reset()
+    yield
+    server._login_limiter.reset()
+
+
 def _wait_for_device_online(
     client: TestClient,
     machine_id: str,
@@ -205,6 +212,10 @@ def test_client_session_is_machine_scoped_after_qr_pairing(tmp_path):
         machine_b = _pair_device(
             client, label="Machine B", platform="linux", hostname="machine-b",
         )
+        client.app.state.hub._wrappers.update({
+            machine_a: object(),
+            machine_b: object(),
+        })
 
         started = client.post(
             "/api/client-pairing", json={"machine_id": machine_a},

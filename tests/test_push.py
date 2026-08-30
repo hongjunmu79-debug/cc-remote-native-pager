@@ -4,10 +4,12 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cc_remote.config import RelayConfig
 from cc_remote.protocol import TurnResult
+from cc_remote.relay import server
 from cc_remote.relay.push import (
     PushDispatcher, PushSubscription, PushSubscriptionStore,
 )
@@ -28,6 +30,13 @@ def _cfg(tmp_path, **overrides) -> RelayConfig:
     }
     values.update(overrides)
     return RelayConfig(**values)
+
+
+@pytest.fixture(autouse=True)
+def _clear_login_rate_limit() -> None:
+    server._login_limiter.reset()
+    yield
+    server._login_limiter.reset()
 
 
 def _subscription(machine_id: str = "nono") -> dict[str, object]:
