@@ -125,7 +125,7 @@ class QrScannerActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    @OptIn(ExperimentalGetImage::class)
+    @ExperimentalGetImage
     private fun analyze(proxy: androidx.camera.core.ImageProxy) {
         val mediaImage = proxy.image
         if (mediaImage == null || accepted) {

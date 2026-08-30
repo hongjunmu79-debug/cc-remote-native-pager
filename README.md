@@ -104,14 +104,20 @@ Android pager / 手机浏览器 ──http://<windows-lan-ip>:8765──▶ Wind
 
 ### 1) 安装 Windows 发行版
 
-> **[下载 Windows x64 一键安装包（setup.exe）](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5/cc-remote-v3.0.0-pager.5-windows-x64-setup.exe)**
-> · [SHA-256 校验文件](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5/cc-remote-v3.0.0-pager.5-windows-x64-setup.exe.sha256)
+> **[GitHub Releases：下载 Windows x64 一键安装包（`*-windows-x64-setup.exe`）](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases)**
+> · [从同一 Release 下载对应的 `*-windows-x64-setup.exe.sha256`](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases)
 
-下载同一 Release 中的 `.exe` 与 `.sha256` 后校验：
+> **源码与安装包必须匹配：** 本 README 可能先于安装包发布更新。仅使用发布信息
+> 明确包含（或构建自）你准备部署的源码 SHA 的 Release；不能根据当前 README
+> 把尚未发布的分支功能归因于旧 Release 资产。
+
+在只放有本次下载文件的目录中，校验同一 Release 的 `.exe` 与 `.sha256`：
 
 ```powershell
-Get-FileHash .\cc-remote-v3.0.0-pager.5-windows-x64-setup.exe -Algorithm SHA256
-Get-Content .\cc-remote-v3.0.0-pager.5-windows-x64-setup.exe.sha256
+$setup = @(Get-Item .\cc-remote-v*-windows-x64-setup.exe)
+if ($setup.Count -ne 1) { throw "expected exactly one setup.exe" }
+Get-FileHash -LiteralPath $setup[0].FullName -Algorithm SHA256
+Get-Content -LiteralPath "$($setup[0].FullName).sha256"
 ```
 
 双击安装包即可。便携版仍在同一 Release 提供，解压后运行 `start-portable.ps1`。

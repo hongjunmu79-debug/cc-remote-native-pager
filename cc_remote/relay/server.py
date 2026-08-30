@@ -327,6 +327,8 @@ async def _claims_allow_machine(
     machine_id: str,
     devices: DeviceStore,
 ) -> bool:
+    if claims.client_id is not None:
+        return claims.allows_machine(machine_id)
     return claims.allows_machine(machine_id) or await devices.owned_by(
         machine_id, _device_subject(claims))
 
@@ -530,8 +532,14 @@ def create_app(
         except Exception:
             return JSONResponse({"error": "bad_request"}, status_code=400)
         requested_machine = body.get("machine_id") if isinstance(body, dict) else None
+        if isinstance(requested_machine, str) and claims.client_id is not None:
+            if not claims.allows_machine(requested_machine):
+                return JSONResponse(
+                    {"error": "invalid_subscription"}, status_code=400,
+                )
         enrolled_machine = (
             isinstance(requested_machine, str)
+            and claims.client_id is None
             and await devices.owned_by(
                 requested_machine, _device_subject(claims))
         )
@@ -835,7 +843,17 @@ def create_app(
             return JSONResponse({"ok": False}, status_code=401)
         subject = _device_subject(claims)
         records = await devices.list_for_subject(subject)
+        if claims.client_id is not None:
+            records = [
+                record for record in records
+                if await _claims_allow_machine(claims, record.machine_id, devices)
+            ]
         connected = set(hub.machine_ids)
+        if claims.client_id is not None:
+            connected = {
+                machine_id for machine_id in connected
+                if await _claims_allow_machine(claims, machine_id, devices)
+            }
         result = [
             {
                 "machine_id": record.machine_id,
@@ -854,7 +872,7 @@ def create_app(
             machine_id for machine_id in connected
             if claims.allows_machine(machine_id)
         }
-        if "*" not in claims.machines:
+        if claims.client_id is None and "*" not in claims.machines:
             visible_legacy.update(claims.machines)
         for machine_id in sorted(visible_legacy - known):
             result.append({
@@ -887,6 +905,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if claims.client_id is not None:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         grant = await devices.create_pairing(
             _device_subject(claims), ttl=cfg.device_pairing_ttl_seconds)
         return JSONResponse(
@@ -901,6 +921,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if claims.client_id is not None:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         await devices.close_pairing(_device_subject(claims))
         return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
@@ -960,6 +982,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if not await _claims_allow_machine(claims, machine_id, devices):
+            return JSONResponse({"error": "not_found"}, status_code=404)
         try:
             body = await _read_json_limited(req, _DEVICE_BODY_MAX_BYTES)
         except _BodyTooLarge:
@@ -985,6 +1009,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if not await _claims_allow_machine(claims, machine_id, devices):
+            return JSONResponse({"error": "not_found"}, status_code=404)
         revoked = await devices.revoke(machine_id, _device_subject(claims))
         if not revoked:
             return JSONResponse({"error": "not_found"}, status_code=404)
@@ -1000,12 +1026,17 @@ def create_app(
                 headers={"Cache-Control": "no-store"},
             )
         records = await devices.list_for_subject(_device_subject(claims))
+        if claims.client_id is not None:
+            records = [
+                record for record in records
+                if await _claims_allow_machine(claims, record.machine_id, devices)
+            ]
         machines = {record.machine_id for record in records}
         machines.update(
             machine_id for machine_id in hub.machine_ids
             if claims.allows_machine(machine_id)
         )
-        if "*" not in claims.machines:
+        if claims.client_id is None and "*" not in claims.machines:
             machines.update(claims.machines)
         return JSONResponse(
             {"ok": True, "machines": sorted(machines)},

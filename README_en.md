@@ -115,10 +115,28 @@ Android pager / phone browser ──http://<windows-lan-ip>:8765──▶ Window
 
 ### 1) Install the Windows distribution
 
-Download the
-[Windows x64 one-click installer](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5/cc-remote-v3.0.0-pager.5-windows-x64-setup.exe)
-and its adjacent `.sha256` file from the GitHub Release. The portable archive
-remains available for foreground use. The installer:
+> **[GitHub Releases: download the Windows x64 one-click installer
+> (`*-windows-x64-setup.exe`)](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases)**
+> · [Download its matching `*-windows-x64-setup.exe.sha256` from the same
+> Release](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases)
+
+> **The source and installer must match:** this README may be updated before an
+> installer is published. Use only a Release whose publication identifies the
+> source SHA it contains (or was built from). Do not attribute unreleased branch
+> features described here to an older Release asset.
+
+In a directory containing only the two files from that Release, verify the
+installer against its sidecar:
+
+```powershell
+$setup = @(Get-Item .\cc-remote-v*-windows-x64-setup.exe)
+if ($setup.Count -ne 1) { throw "expected exactly one setup.exe" }
+Get-FileHash -LiteralPath $setup[0].FullName -Algorithm SHA256
+Get-Content -LiteralPath "$($setup[0].FullName).sha256"
+```
+
+The portable archive remains available in the same Release for foreground use.
+The installer:
 
 - installs to a directory you choose (no fixed path);
 - generates strong `SESSION_SECRET` and `WRAPPER_TOKEN`;

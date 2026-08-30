@@ -61,6 +61,18 @@ def _wait_for_device_online(
         time.sleep(0.01)
 
 
+def _pair_device(client: TestClient, *, label: str, platform: str, hostname: str) -> str:
+    code = client.post("/api/devices/pairing").json()["code"]
+    paired = client.post("/api/devices/pair", json={
+        "code": code,
+        "label": label,
+        "platform": platform,
+        "hostname": hostname,
+    })
+    assert paired.status_code == 200
+    return paired.json()["machine_id"]
+
+
 def test_pairing_code_is_single_use_and_plaintext_credential_is_not_stored(tmp_path):
     path = tmp_path / "devices.sqlite3"
     store = DeviceStore(str(path))
@@ -177,6 +189,52 @@ def test_revoke_during_wrapper_hello_prevents_late_registration(tmp_path):
             with pytest.raises(WebSocketDisconnect):
                 wrapper.receive_text()
         assert client.app.state.hub.machine_ids == []
+
+
+def test_client_session_is_machine_scoped_after_qr_pairing(tmp_path):
+    server._pair_limiter.reset()
+    cfg = _cfg(tmp_path)
+    with TestClient(create_app(cfg), base_url=cfg.public_origin) as client:
+        assert client.post(
+            "/api/login", json={"password": cfg.login_password}
+        ).status_code == 200
+
+        machine_a = _pair_device(
+            client, label="Machine A", platform="darwin", hostname="machine-a",
+        )
+        machine_b = _pair_device(
+            client, label="Machine B", platform="linux", hostname="machine-b",
+        )
+
+        started = client.post(
+            "/api/client-pairing", json={"machine_id": machine_a},
+        )
+        assert started.status_code == 200
+        payload = json.loads(started.json()["payload"])
+        client.cookies.clear()
+        redeemed = client.post("/api/client-pairing/redeem", json={
+            "token": payload["token"],
+            "machine_id": payload["machine_id"],
+            "client_id": payload["client_id"],
+        })
+        assert redeemed.status_code == 200
+        client_cookie = client.cookies[SESSION_COOKIE_NAME].strip('"')
+        claims = session_token_claims(client_cookie, cfg.session_secret)
+        assert claims is not None
+        assert claims.client_id == payload["client_id"]
+        assert claims.machines == (machine_a,)
+
+        devices = client.get("/api/devices").json()["devices"]
+        device_ids = {entry["machine_id"] for entry in devices}
+        assert machine_a in device_ids
+        assert machine_b not in device_ids
+        assert client.get("/api/machines").json()["machines"] == [machine_a]
+
+        assert client.post("/api/devices/pairing").status_code == 403
+        assert client.patch(f"/api/devices/{machine_b}", json={
+            "label": "hijack",
+        }).status_code == 404
+        assert client.delete(f"/api/devices/{machine_b}").status_code == 404
 
 
 def test_paired_device_expands_multi_user_machine_authority(tmp_path):
