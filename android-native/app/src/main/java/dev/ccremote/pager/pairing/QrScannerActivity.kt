@@ -1,5 +1,6 @@
 package dev.ccremote.pager.pairing
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
@@ -14,7 +15,6 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -125,7 +125,7 @@ class QrScannerActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    @ExperimentalGetImage
+    @SuppressLint("UnsafeOptInUsageError")
     private fun analyze(proxy: androidx.camera.core.ImageProxy) {
         val mediaImage = proxy.image
         if (mediaImage == null || accepted) {
