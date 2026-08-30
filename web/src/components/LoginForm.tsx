@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 import { Icon, ClaudeMark } from "../icons";
 import { useImeSubmit } from "../use-ime-submit";
 
@@ -12,6 +13,10 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [multiUser, setMultiUser] = useState(false);
+  const [passwordEnabled, setPasswordEnabled] = useState(false);
+  const [passwordFallbackOpen, setPasswordFallbackOpen] = useState(false);
+  const [pairingQrSvg, setPairingQrSvg] = useState<string | null>(null);
+  const [pairingExpires, setPairingExpires] = useState<number | null>(null);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -28,7 +33,10 @@ export function LoginForm({
       credentials: "same-origin", cache: "no-store",
     }).then(async (response) => response.ok ? response.json() : null)
       .then((payload) => {
-        if (!cancelled) setMultiUser(payload?.multi_user === true);
+        if (!cancelled) {
+          setMultiUser(payload?.multi_user === true);
+          setPasswordEnabled(payload?.password_enabled === true);
+        }
       }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
@@ -47,6 +55,38 @@ export function LoginForm({
       if (r.status === 429) { setError("尝试太频繁，等一分钟再试"); return; }
       if (!r.ok) { setError(multiUser ? "账号或密码错误" : "密码错误"); return; }
       onLogin();
+    } catch {
+      setError("网络错误");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startPairing = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const response = await fetch("/api/client-pairing", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || typeof body?.payload !== "string") {
+        if (body?.error === "pairing_requires_local_or_authenticated_console") {
+          setError("请在运行 relay 的电脑上打开“cc-remote 控制台”生成二维码");
+        } else if (body?.error === "wrapper_offline") {
+          setError("本机 wrapper 尚未连接，请稍后重试");
+        } else {
+          setError("暂时无法生成配对二维码");
+        }
+        return;
+      }
+      setPairingQrSvg(await QRCode.toString(body.payload, {
+        type: "svg", errorCorrectionLevel: "M", margin: 2, width: 280,
+      }));
+      setPairingExpires(typeof body.expires_at === "number" ? body.expires_at : null);
     } catch {
       setError("网络错误");
     } finally {
@@ -109,6 +149,33 @@ export function LoginForm({
           <span className="name"><b>cc</b><span>·remote</span></span>
         </div>
         <p className="login-tag serif" style={{ fontSize: 15 }}>你的 Claude Code，随身遥控</p>
+        <section className="login-pairing">
+          {pairingQrSvg ? <>
+            <div className="login-qr" role="img"
+              aria-label="cc-remote 一次性客户端配对二维码"
+              dangerouslySetInnerHTML={{ __html: pairingQrSvg }} />
+            <b>用 Android pager 扫码</b>
+            <small>
+              二维码一次有效
+              {pairingExpires ? ` · ${new Date(pairingExpires * 1000).toLocaleTimeString()} 前` : ""}
+            </small>
+            <button type="button" className="login-pair-refresh"
+              disabled={loading} onClick={() => void startPairing()}>
+              刷新二维码
+            </button>
+          </> : <>
+            <button type="button" className="login-btn" disabled={loading}
+              onClick={() => void startPairing()}>
+              {loading ? "生成中…" : "显示扫码配对二维码"}
+            </button>
+            <small>无需输入域名或密码；仅 relay 本机或已登录控制台可签发</small>
+          </>}
+        </section>
+        {passwordEnabled && <button type="button" className="login-fallback-toggle"
+          onClick={() => setPasswordFallbackOpen((open) => !open)}>
+          {passwordFallbackOpen ? "收起密码登录" : "使用密码后备登录"}
+        </button>}
+        {passwordEnabled && passwordFallbackOpen && <>
         {multiUser && <div className="login-field">
           <Icon name="user" size={18} />
           <input
@@ -178,6 +245,7 @@ export function LoginForm({
           disabled={loading || !password || (multiUser && !username)}>
           {loading ? "登录中…" : "进入"}
         </button>
+        </>}
       </div>
     </div>
   );

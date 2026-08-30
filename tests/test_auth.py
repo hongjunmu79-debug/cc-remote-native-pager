@@ -131,7 +131,10 @@ def test_multi_user_login_filters_machine_discovery_and_websocket_access():
     app = create_app(cfg)
     app.state.hub._wrappers.update({"mac": object(), "nono": object()})
     with TestClient(app, base_url=cfg.public_origin) as client:
-        assert client.get("/api/auth-config").json() == {"multi_user": True}
+        assert client.get("/api/auth-config").json() == {
+            "multi_user": True,
+            "password_enabled": True,
+        }
         assert client.post(
             "/api/login",
             json={"password": users["alice"]["password"]},
@@ -184,11 +187,13 @@ def test_session_token_round_trips_subject_and_machine_authority():
         60,
         subject="alice",
         machines=("mac", "nono"),
+        client_id="paired-client",
     )
     claims = session_token_claims(token, "s" * 48)
     assert claims is not None
     assert claims.subject == "alice"
     assert claims.machines == ("mac", "nono")
+    assert claims.client_id == "paired-client"
     assert claims.allows_machine("mac") is True
     assert claims.allows_machine("other") is False
 
@@ -227,6 +232,68 @@ def test_login_sets_httponly_secure_strict_cookie_without_returning_token():
     assert "samesite=strict" in cookie
     cookie_value = response.cookies[SESSION_COOKIE_NAME].strip('"')
     assert verify_session_token(cookie_value, cfg.session_secret)
+
+
+def test_client_qr_pairing_is_single_use_and_machine_scoped():
+    cfg = _cfg()
+    app = create_app(cfg)
+    app.state.hub._wrappers["desktop"] = object()
+    with TestClient(app, base_url=cfg.public_origin) as client:
+        _login(client, cfg)
+        started = client.post(
+            "/api/client-pairing",
+            json={"machine_id": "desktop"},
+        )
+        assert started.status_code == 200
+        issued = started.json()
+        payload = json.loads(issued["payload"])
+        assert payload == {
+            "v": 1,
+            "type": "cc_remote_client_pair",
+            "relay": cfg.public_origin,
+            "token": payload["token"],
+            "machine_id": "desktop",
+            "client_id": issued["client_id"],
+        }
+        client.cookies.clear()
+        redeemed = client.post("/api/client-pairing/redeem", json={
+            "token": payload["token"],
+            "machine_id": payload["machine_id"],
+            "client_id": payload["client_id"],
+        })
+        assert redeemed.status_code == 200
+        claims = session_token_claims(
+            client.cookies[SESSION_COOKIE_NAME].strip('"'), cfg.session_secret)
+        assert claims is not None
+        assert claims.machines == ("desktop",)
+        assert claims.client_id == issued["client_id"]
+        client.cookies.clear()
+        assert client.post("/api/client-pairing/redeem", json={
+            "token": payload["token"],
+            "machine_id": payload["machine_id"],
+            "client_id": payload["client_id"],
+        }).status_code == 401
+
+
+def test_client_qr_pairing_bootstrap_is_loopback_only():
+    cfg = _cfg(public_origin="http://192.168.1.50:8765", allow_insecure_http=True)
+    app = create_app(cfg)
+    app.state.hub._wrappers["desktop"] = object()
+    with TestClient(
+        app,
+        base_url="http://127.0.0.1:8765",
+        client=("127.0.0.1", 50000),
+        headers={"Origin": "http://127.0.0.1:8765"},
+    ) as local:
+        assert local.post("/api/client-pairing", json={}).status_code == 200
+    with TestClient(
+        app,
+        base_url=cfg.public_origin,
+        client=("192.168.1.99", 50000),
+        headers={"Origin": cfg.public_origin},
+    ) as remote:
+        denied = remote.post("/api/client-pairing", json={})
+        assert denied.status_code == 403
 
 
 def test_login_and_logout_reject_cross_origin_browser_posts():
@@ -680,12 +747,13 @@ def test_relay_config_construction_is_test_friendly_but_startup_validation_fails
     with pytest.raises(ValueError) as error:
         validate_relay_config(invalid)
     message = str(error.value)
-    assert "LOGIN_PASSWORD" in message
+    assert "LOGIN_PASSWORD" not in message
     assert "SESSION_SECRET" in message
     assert "WRAPPER_TOKEN" in message
     assert "PUBLIC_ORIGIN" in message
     validate_relay_config(_cfg())
     validate_relay_config(_cfg(public_origin="http://localhost:8765"))
+    validate_relay_config(_cfg(login_password=""))
 
 
 def test_relay_config_rejects_non_tls_public_origin():

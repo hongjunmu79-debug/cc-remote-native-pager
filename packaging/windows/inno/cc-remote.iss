@@ -33,7 +33,7 @@
   #define OutputName "cc-remote-v{#DistVersion}-windows-x64-setup"
 #endif
 #ifndef SetupArgs
-  #define SetupArgs ""
+  #define SetupArgs "-Unattended -AllowInsecureHttp"
 #endif
 
 [Setup]
@@ -73,3 +73,8 @@ Source: "{#StageDir}\payload\*"; DestDir: "{app}\release\payload"; Flags: ignore
 ; setup.ps1 performs the real install into {app} (the user-chosen install
 ; root). The wizard waits for it to finish so failures surface to the user.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\setup.ps1"" -InstallRoot ""{app}"" {#SetupArgs}"; Flags: waituntilterminated; StatusMsg: "Installing cc-remote (this may take a minute)..."
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\packaging\windows\open-console.ps1"" -InstallRoot ""{app}"""; Description: "Open cc-remote console"; Flags: postinstall nowait skipifsilent
+
+[Icons]
+Name: "{group}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\packaging\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
+Name: "{autodesktop}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\packaging\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"

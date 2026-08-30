@@ -19,7 +19,7 @@ import {
   queryAcceptanceHistoryHead,
   type QueryAcceptanceHistoryHead,
 } from "./outbox.ts";
-import { probeSession, shouldReconnectAfterSessionProbe } from "./session-auth.ts";
+import { PAIRED_CLIENT_ID_KEY, probeSession, shouldReconnectAfterSessionProbe } from "./session-auth.ts";
 import { uuid } from "./util.ts";
 
 export type ConnState = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -115,7 +115,9 @@ export class RelayWs {
   constructor(cb: WsCallbacks, machineId = "default") {
     this.cb = cb;
     this.machineId = machineId;
-    this.clientId = uuid();
+    const pairedClientId = typeof localStorage !== "undefined"
+      ? localStorage.getItem(PAIRED_CLIENT_ID_KEY) : null;
+    this.clientId = pairedClientId || uuid();
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = new URL(`${proto}//${window.location.host}/ws`);
     if (machineId !== "default") url.searchParams.set("machine", machineId);

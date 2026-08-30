@@ -21,6 +21,7 @@ zero token cost to the end user.
 | `start.ps1` / `stop.ps1` | Foreground (portable) run and supervised-service control. |
 | `supervise.ps1` | Scheduled-task action: parents the real process, bounded restart-on-failure, stop markers. |
 | `firewall.ps1` | LocalSubnet-scoped inbound rule for the relay port only. |
+| `open-console.ps1` | Starts registered tasks if needed and opens the loopback Web console used to issue a QR. |
 
 ## How a release is built
 
@@ -59,6 +60,11 @@ The installer:
    action is `supervise.ps1` (bounded restart-on-failure, never untracked
    children).
 6. Adds a firewall rule for **LocalSubnet** and the relay port only.
+
+The compiled `...-windows-x64-setup.exe` supplies safe unattended defaults,
+creates Start Menu/Desktop **cc-remote 控制台** shortcuts, and opens the
+console after install. `LOGIN_PASSWORD` is optional; set it only when a password
+fallback is desired in addition to QR pairing.
 
 `-NoServices` performs a portable-style install (release + config + venv, no
 tasks, no firewall); `start.ps1` then runs the processes in the foreground.

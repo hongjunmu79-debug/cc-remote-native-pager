@@ -96,7 +96,7 @@ Office 产物预览（DOCX/XLSX/PPTX → PDF）另需在 wrapper 主机安装 **
 或响应式 Web 客户端。不需要公网 VPS、域名或 TLS——流量停留在局域网内。
 
 ```
-Android pager / 手机浏览器 ──http://<windows-lan-ip>:8766──▶ Windows 中继+wrapper
+Android pager / 手机浏览器 ──http://<windows-lan-ip>:8765──▶ Windows 中继+wrapper
                                                                   └─ 驱动本地 claude / codex
 ```
 
@@ -104,49 +104,63 @@ Android pager / 手机浏览器 ──http://<windows-lan-ip>:8766──▶ Wind
 
 ### 1) 安装 Windows 发行版
 
-从
-[GitHub Release](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5)
-下载 `3.0.0-pager.5` Windows 安装包（或便携压缩包），运行 `setup.ps1`（便携包
-则解压后运行 `start.ps1`）。安装器会：
+> **[GitHub Releases：下载 Windows x64 一键安装包（`*-windows-x64-setup.exe`）](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases)**
+> · [从同一 Release 下载对应的 `*-windows-x64-setup.exe.sha256`](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases)
+
+> **源码与安装包必须匹配：** 本 README 可能先于安装包发布更新。仅使用发布信息
+> 明确包含（或构建自）你准备部署的源码 SHA 的 Release；不能根据当前 README
+> 把尚未发布的分支功能归因于旧 Release 资产。
+
+在只放有本次下载文件的目录中，校验同一 Release 的 `.exe` 与 `.sha256`：
+
+```powershell
+$setup = @(Get-Item .\cc-remote-v*-windows-x64-setup.exe)
+if ($setup.Count -ne 1) { throw "expected exactly one setup.exe" }
+Get-FileHash -LiteralPath $setup[0].FullName -Algorithm SHA256
+Get-Content -LiteralPath "$($setup[0].FullName).sha256"
+```
+
+双击安装包即可。便携版仍在同一 Release 提供，解压后运行 `start-portable.ps1`。
+安装器会：
 
 - 安装到你选择的目录（无固定路径）；
 - 生成强随机的 `SESSION_SECRET` 与 `WRAPPER_TOKEN`；
-- 询问 Web 登录密码、机器名、默认工作区和局域网端点/端口；
+- 自动采用本机名、可用工作区和局域网地址作为默认配置，不要求设置登录密码；
 - 检测 `claude` 与 `codex`，不复制它们的凭证；
 - 以仅限当前用户的 ACL 写入配置，并拒绝占位值；
 - 注册定时任务监督长驻的中继/wrapper 进程，带有限的失败重启；
 - 在所选端口创建仅限 `LocalSubnet` 的防火墙规则；
+- 创建开始菜单和桌面「cc-remote 控制台」快捷方式，安装完成后自动打开；
 - 升级时保留既有配置，支持干净卸载/回滚，不触碰 Claude/Codex 会话与凭证。
 
 无人值守安装可通过传入配置文件完成。详见
 [packaging/windows/README.md](packaging/windows/README.md)。
 
-### 2) 记下局域网端点
+### 2) 打开控制台并显示配对二维码
 
-安装器会打印中继 origin，例如 `http://192.168.1.23:8766/`。这个精确 origin
-就是 Android 应用（以及局域网内任何浏览器）要连接的对象。在另一台机器上验证
-Web 客户端：
+安装结束会自动打开本机控制台；以后可双击桌面或开始菜单里的「cc-remote
+控制台」。点击「显示扫码配对二维码」。二维码为一次性、短时凭据，绑定当前
+`machine_id` 与新客户端；relay 只保存其摘要，二维码过期、使用或 relay 重启后失效。
+
+中继 origin 通常是 `http://192.168.1.23:8765/`。可在另一台机器上验证：
 
 ```bash
-curl http://<windows-lan-ip>:8766/healthz
+curl http://<windows-lan-ip>:8765/healthz
 # 期望: {"ok":true,"wrapper_connected":true,"clients":0}
 ```
 
 ### 3) 安装并打开 Android pager
 
 1. 构建或下载 Android APK（见下方 Android 说明），安装并启动。
-2. 首次启动显示服务器入口页 —— 输入中继 origin（`http://<windows-lan-ip>:8766/`）。
-   - HTTPS 根 origin 总是被接受。
-   - 明文 HTTP 只接受显式的私有/本地 IP 字面量（RFC1918 `10/8`、`172.16/12`、
-     `192.168/16`、回环），并要求可见的警告确认。公网 HTTP、userinfo、查询串、
-     片段和非根路径一律拒绝。
-3. 用安装时设定的 Web 登录密码登录。
+2. 点「扫码」，扫描 Windows 控制台显示的二维码。
+3. App 自动校验 relay origin、兑换 HttpOnly 会话 cookie、保存服务器与设备作用域，
+   随后直接进入会话；无需输入域名或密码。手工地址与密码登录仅作为后备。
 4. WebView 持有登录/WebSocket/聊天；原生仪表盘通过桥接层投影同一会话状态。
    保持单一会话状态机。
 
 ### 4) （纯 Web 替代方案）使用响应式 Web 客户端
 
-在局域网任意浏览器打开 `http://<windows-lan-ip>:8766/` 并登录。Web 客户端可
+在局域网任意浏览器打开 `http://<windows-lan-ip>:8765/` 并登录。Web 客户端可
 作为 PWA 安装，在手机上同样可用；原生 pager 在其之上增加受限仪表盘投影。
 
 ### 5) 本机单机快速开始（源码检出）
@@ -169,7 +183,6 @@ install -m 600 .env.example .env    # Windows: copy .env.example .env
 编辑 `.env` —— 至少：
 
 ```ini
-LOGIN_PASSWORD=<强密码>
 SESSION_SECRET=<openssl rand -hex 32>
 WRAPPER_TOKEN=<openssl rand -hex 32>
 PUBLIC_ORIGIN=http://127.0.0.1:8765
@@ -184,7 +197,9 @@ python -m cc_remote.relay          # 提供 web + /ws + /api
 python -m cc_remote.wrapper        # 驱动本地 claude / codex CLI
 ```
 
-然后打开 `http://127.0.0.1:8765` 登录。
+然后在 relay 主机打开 `http://127.0.0.1:8765`，显示二维码并用新设备扫码。
+如需密码后备，可额外设置 `LOGIN_PASSWORD=<强密码>`；多用户部署可设置
+`LOGIN_USERS_JSON`。
 
 ![cc-remote 新建会话](assets/readme-new-session.jpg)
 
@@ -280,7 +295,7 @@ WebView 以与局域网完全相同的方式持有登录/WebSocket/聊天。公�
 ```bash
 openssl rand -hex 32   # WRAPPER_TOKEN（relay 与 wrapper 必须一致）
 openssl rand -hex 32   # SESSION_SECRET（relay）
-# 另外选择一个 LOGIN_PASSWORD（Web 登录密码）
+# 可选：另设 LOGIN_PASSWORD（Web 密码后备）或 LOGIN_USERS_JSON（多用户后备）
 ```
 
 构建 Web 客户端并把暂存目录上传到 VPS，然后运行
@@ -349,7 +364,7 @@ Code 会话遵循各 CLI 的真实控制平面，不替换官方命令：
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `RELAY_HOST` / `RELAY_PORT` | `127.0.0.1` / `8765` | 监听地址（生产环境在 Caddy 之后——保持 127.0.0.1；局域网设 `0.0.0.0`）。 |
-| `LOGIN_PASSWORD` | 空 | 单用户 Web 登录密码。**必填**，除非设置了 `LOGIN_USERS_JSON`。 |
+| `LOGIN_PASSWORD` | 空 | 可选单用户 Web 密码后备；正常新客户端通过一次性二维码配对。 |
 | `LOGIN_USERS_JSON` | 空 | 可选多用户策略；取代 `LOGIN_PASSWORD`。 |
 | `SESSION_SECRET` | 空 | 签名会话 token 的 HMAC 密钥。**必填**（`openssl rand -hex 32`）。 |
 | `PUBLIC_ORIGIN` | 空 | 允许连接的浏览器精确 origin，例如 `https://remote.example.com`；**必填**，非回环 origin 必须使用 HTTPS，除非启用 `ALLOW_INSECURE_HTTP`。 |
@@ -379,8 +394,10 @@ Code 会话遵循各 CLI 的真实控制平面，不替换官方命令：
 
 ## 鉴权模型
 
-- **Web 客户端：** `POST /api/login` 创建短时 HMAC 会话，写入 **HttpOnly、
-  SameSite=Strict** cookie。JavaScript 读不到它，URL 里也不会出现 token。
+- **Web/Android 客户端：** relay 本机控制台或已有会话签发一次性、短时、
+  `machine_id/client_id` 作用域的 QR JSON；`POST /api/client-pairing/redeem` 消费后
+  创建 HMAC 会话，写入 **HttpOnly、SameSite=Strict** cookie。二维码 token 不进 URL，
+  使用后立即失效。`POST /api/login` 仅保留为可选密码后备。
   WebSocket 还必须通过精确 `Origin` 校验。
 - **wrapper ⇄ relay：** WS 握手携带机器凭证。手动部署用 `WRAPPER_TOKEN` /
   `WRAPPER_TOKENS_JSON`；设备中心签发独立、机器绑定、可单独吊销的凭证。relay
@@ -463,8 +480,9 @@ Code 会话遵循各 CLI 的真实控制平面，不替换官方命令：
   bypassPermissions`，Codex 默认审批策略 `never` 并继承机器的 Codex sandbox
   配置。**任何能登录并进入 Code 的人都视为持有 wrapper 机器的远程代理/shell
   权限。** Work 使用独立私有根目录，不暴露外部目录。
-- `LOGIN_PASSWORD` / `LOGIN_USERS_JSON`、`WRAPPER_TOKEN` / `WRAPPER_TOKENS_JSON`
-  和 `SESSION_SECRET` 构成鉴权边界：使用强随机值，绝不提交到仓库或粘贴进聊天，
+- 一次性客户端配对、可选的 `LOGIN_PASSWORD` / `LOGIN_USERS_JSON`、
+  `WRAPPER_TOKEN` / `WRAPPER_TOKENS_JSON` 和 `SESSION_SECRET` 构成鉴权边界：
+  使用强随机值，绝不提交到仓库或粘贴进聊天，
   并定期轮换。仓库里的 `.env` 仅供本地开发；生产 wrapper 必须使用仅 root 可读
   的环境文件。
 - 生产环境务必使用 TLS（`wss://`）。只在临时裸公网 IPv4 部署时才设

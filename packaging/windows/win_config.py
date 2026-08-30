@@ -185,7 +185,8 @@ def detect_codex() -> str | None:
 
 def validate_answers(answers: FirstRunAnswers) -> list[str]:
     errors: list[str] = []
-    errors.extend(validate_login_password(answers.login_password))
+    if answers.login_password:
+        errors.extend(validate_login_password(answers.login_password))
     errors.extend(validate_machine_name(answers.machine_name))
     errors.extend(validate_workspace(answers.workspace))
     errors.extend(
@@ -331,10 +332,13 @@ def validate_preserved_config(content: str) -> list[str]:
     """Reject a preserved config whose secrets drifted back to placeholders."""
     env = parse_env_file(content)
     errors: list[str] = []
-    for key in ("LOGIN_PASSWORD", "SESSION_SECRET", "WRAPPER_TOKEN"):
+    for key in ("SESSION_SECRET", "WRAPPER_TOKEN"):
         value = env.get(key, "")
         if is_placeholder(value):
             errors.append(f"{key} is a placeholder in the preserved config")
+    login_password = env.get("LOGIN_PASSWORD", "")
+    if login_password:
+        errors.extend(validate_login_password(login_password))
     if len(env.get("SESSION_SECRET", "")) < 32:
         errors.append("SESSION_SECRET must be at least 32 characters")
     if len(env.get("WRAPPER_TOKEN", "")) < 32:

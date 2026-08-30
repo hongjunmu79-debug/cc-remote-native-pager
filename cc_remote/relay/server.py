@@ -1,9 +1,9 @@
-"""FastAPI relay: /api/login (password -> session cookie), /ws (wrapper + web
+"""FastAPI relay: QR/password login -> session cookie, /ws (wrapper + web
 clients), /healthz, optional static hosting of the web client from the same
 origin.
 
 Auth: wrapper authenticates with a Bearer WRAPPER_TOKEN header; web clients
-authenticate with a Secure HttpOnly session cookie obtained from /api/login.
+authenticate with a Secure HttpOnly session cookie obtained from a login API.
 Cookie-authenticated WebSockets must also match PUBLIC_ORIGIN when configured.
 
 The relay never imports claude_agent_sdk and never touches the model API.
@@ -32,6 +32,7 @@ from cc_remote.relay.auth import (
     SESSION_COOKIE_NAME, SessionClaims, authenticate_login,
     make_session_token, session_token_claims, wrapper_machine_scope,
 )
+from cc_remote.relay.client_pairing import ClientPairingStore
 from cc_remote.relay.devices import DeviceStore
 from cc_remote.relay.pairing import RelayHub
 from cc_remote.relay.push import (
@@ -229,6 +230,32 @@ def _request_origin_allowed(req: Request, cfg: RelayConfig) -> bool:
     return not origin or origin == cfg.public_origin
 
 
+def _local_pairing_request(req: Request) -> bool:
+    """True only for a browser directly using a loopback relay origin.
+
+    This is the password-free bootstrap path used by the console shortcut on
+    the relay host. A request forwarded by Caddy retains the public client IP
+    through ``_request_ip`` and therefore cannot use this exception.
+    """
+    if _request_ip(req) not in {"127.0.0.1", "::1", "localhost"}:
+        return False
+    origin = req.headers.get("origin", "").strip()
+    if not origin:
+        return False
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+        and parsed.path in {"", "/"}
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.username is None
+    )
+
+
 def _request_ip(req: Request) -> str:
     """Use Caddy's client address only when the direct peer is loopback.
 
@@ -300,6 +327,8 @@ async def _claims_allow_machine(
     machine_id: str,
     devices: DeviceStore,
 ) -> bool:
+    if claims.client_id is not None:
+        return claims.allows_machine(machine_id)
     return claims.allows_machine(machine_id) or await devices.owned_by(
         machine_id, _device_subject(claims))
 
@@ -373,6 +402,7 @@ async def _serve_client_until_expiry(
     expires_at: int,
     revoked: asyncio.Event,
     machine_id: str = "default",
+    expected_client_id: str | None = None,
 ) -> None:
     """Serve until disconnect, signed expiry, or server-side revocation."""
     remaining = max(0.0, expires_at - time.time())
@@ -396,7 +426,10 @@ async def _serve_client_until_expiry(
 
     guard_task = asyncio.create_task(guard())
     try:
-        if machine_id == "default":
+        if expected_client_id is not None:
+            await hub.serve_client(
+                websocket, machine_id, expected_client_id=expected_client_id)
+        elif machine_id == "default":
             await hub.serve_client(websocket)
         else:
             await hub.serve_client(websocket, machine_id)
@@ -422,6 +455,7 @@ def create_app(
     validate_relay_config(cfg)
     app = FastAPI(title="cc-remote relay")
     sessions = SessionRegistry(cfg.session_registry_cap)
+    client_pairings = ClientPairingStore()
     devices = device_store or DeviceStore(cfg.device_db_path)
     push_store: PushSubscriptionStore | None = None
     push_dispatcher: PushDispatcher | None = None
@@ -448,6 +482,7 @@ def create_app(
     login_slots = asyncio.Semaphore(cfg.login_inflight_cap)
     app.state.hub = hub
     app.state.sessions = sessions
+    app.state.client_pairings = client_pairings
     app.state.login_slots = login_slots
     app.state.push_store = push_store
     app.state.push_dispatcher = push_dispatcher
@@ -456,7 +491,11 @@ def create_app(
     @app.get("/api/auth-config")
     async def auth_config() -> JSONResponse:
         return JSONResponse(
-            {"multi_user": bool(cfg.login_users_json)},
+            {
+                "multi_user": bool(cfg.login_users_json),
+                "password_enabled": bool(
+                    cfg.login_password or cfg.login_users_json),
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -493,8 +532,14 @@ def create_app(
         except Exception:
             return JSONResponse({"error": "bad_request"}, status_code=400)
         requested_machine = body.get("machine_id") if isinstance(body, dict) else None
+        if isinstance(requested_machine, str) and claims.client_id is not None:
+            if not claims.allows_machine(requested_machine):
+                return JSONResponse(
+                    {"error": "invalid_subscription"}, status_code=400,
+                )
         enrolled_machine = (
             isinstance(requested_machine, str)
+            and claims.client_id is None
             and await devices.owned_by(
                 requested_machine, _device_subject(claims))
         )
@@ -527,6 +572,156 @@ def create_app(
         await push_store.remove_endpoint(_push_subject(claims), endpoint)
         return JSONResponse(
             {"ok": True}, headers={"Cache-Control": "no-store"})
+
+    async def issue_browser_session(
+        *,
+        subject: str | None,
+        machines: tuple[str, ...],
+        client_id: str | None = None,
+    ) -> JSONResponse:
+        token, exp = make_session_token(
+            cfg.session_secret,
+            cfg.session_ttl_seconds,
+            subject=subject,
+            machines=machines,
+            client_id=client_id,
+        )
+        claims = session_token_claims(token, cfg.session_secret)
+        assert claims is not None
+        if not await sessions.register(claims):
+            return JSONResponse(
+                {"error": "session_capacity"}, status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        response = JSONResponse(
+            {"ok": True, "exp": exp}, headers={"Cache-Control": "no-store"}
+        )
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            token,
+            max_age=cfg.session_ttl_seconds,
+            path="/",
+            secure=_cookie_secure(cfg),
+            httponly=True,
+            samesite="strict",
+        )
+        return response
+
+    @app.post("/api/client-pairing")
+    async def client_pairing_start(req: Request) -> JSONResponse:
+        """Issue a one-time QR grant from a trusted console.
+
+        Existing browser sessions may pair another client from any allowed
+        origin. With no session, only a browser directly connected over a
+        loopback origin may bootstrap pairing.
+        """
+        claims = await _active_claims(req, cfg, sessions)
+        if claims is None:
+            if not _local_pairing_request(req):
+                return JSONResponse(
+                    {"error": "pairing_requires_local_or_authenticated_console"},
+                    status_code=403,
+                    headers={"Cache-Control": "no-store"},
+                )
+        elif not _request_origin_allowed(req, cfg):
+            return JSONResponse(
+                {"error": "origin_rejected"}, status_code=403,
+                headers={"Cache-Control": "no-store"},
+            )
+        try:
+            body = await _read_json_limited(req, _DEVICE_BODY_MAX_BYTES)
+        except _BodyTooLarge:
+            return JSONResponse({"error": "too_large"}, status_code=413)
+        except Exception:
+            return JSONResponse({"error": "bad_request"}, status_code=400)
+        requested = body.get("machine_id") if isinstance(body, dict) else None
+        if requested is not None and (
+                not isinstance(requested, str) or not valid_machine_id(requested)):
+            return JSONResponse({"error": "invalid_machine"}, status_code=400)
+
+        connected = hub.machine_ids
+        machine_id = requested or (connected[0] if connected else None)
+        if machine_id is None or machine_id not in connected:
+            return JSONResponse(
+                {"error": "wrapper_offline"}, status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        if claims is not None and not await _claims_allow_machine(
+                claims, machine_id, devices):
+            return JSONResponse({"error": "machine_not_authorized"}, status_code=403)
+
+        grant = await client_pairings.create(
+            machine_id,
+            subject=claims.subject if claims is not None else None,
+            ttl=cfg.device_pairing_ttl_seconds,
+        )
+        if grant is None:
+            return JSONResponse(
+                {"error": "pairing_capacity"}, status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        payload = json.dumps({
+            "v": 1,
+            "type": "cc_remote_client_pair",
+            "relay": cfg.public_origin.rstrip("/"),
+            "token": grant.token,
+            "machine_id": grant.machine_id,
+            "client_id": grant.client_id,
+        }, ensure_ascii=False, separators=(",", ":"))
+        return JSONResponse({
+            "ok": True,
+            "payload": payload,
+            "machine_id": grant.machine_id,
+            "client_id": grant.client_id,
+            "expires_at": grant.expires_at,
+        }, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/client-pairing/redeem")
+    async def client_pairing_redeem(req: Request) -> JSONResponse:
+        if not _request_origin_allowed(req, cfg):
+            return JSONResponse({"error": "origin_rejected"}, status_code=403)
+        if _pair_limiter.limited(_request_ip(req)):
+            return JSONResponse(
+                {"error": "rate_limited"}, status_code=429,
+                headers={"Retry-After": "1", "Cache-Control": "no-store"},
+            )
+        try:
+            body = await _read_json_limited(req, _DEVICE_BODY_MAX_BYTES)
+        except _BodyTooLarge:
+            return JSONResponse({"error": "too_large"}, status_code=413)
+        except Exception:
+            return JSONResponse({"error": "bad_request"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "bad_request"}, status_code=400)
+        token = body.get("token")
+        machine_id = body.get("machine_id")
+        client_id = body.get("client_id")
+        if (
+            not isinstance(token, str) or not (32 <= len(token) <= 128)
+            or not isinstance(machine_id, str) or not valid_machine_id(machine_id)
+            or not isinstance(client_id, str) or not (1 <= len(client_id) <= 128)
+            or any(ord(char) < 32 for char in client_id)
+        ):
+            return JSONResponse({"error": "invalid_pairing"}, status_code=400)
+        grant = await client_pairings.redeem(
+            token, machine_id=machine_id, client_id=client_id)
+        if grant is None:
+            return JSONResponse(
+                {"error": "invalid_or_expired_pairing"}, status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )
+        response = await issue_browser_session(
+            subject=grant.subject,
+            machines=(grant.machine_id,),
+            client_id=grant.client_id,
+        )
+        if response.status_code == 200:
+            log.info(
+                "client pairing redeemed",
+                machine_id=grant.machine_id,
+                client_id=grant.client_id,
+            )
+        return response
 
     @app.post("/api/login")
     async def login(req: Request) -> JSONResponse:
@@ -588,30 +783,14 @@ def create_app(
             log.warning("login failed", ip=ip)
             return JSONResponse({"error": "invalid"}, status_code=401)
         subject, machines = access
-        token, exp = make_session_token(
-            cfg.session_secret,
-            cfg.session_ttl_seconds,
+        response = await issue_browser_session(
             subject=subject,
             machines=machines,
         )
-        claims = session_token_claims(token, cfg.session_secret)
-        assert claims is not None
-        if not await sessions.register(claims):
+        if response.status_code != 200:
             log.warning("session registry full", ip=ip)
-            return JSONResponse({"error": "session_capacity"}, status_code=503)
-        log.info("login ok", ip=ip, exp=exp)
-        response = JSONResponse(
-            {"ok": True, "exp": exp}, headers={"Cache-Control": "no-store"}
-        )
-        response.set_cookie(
-            SESSION_COOKIE_NAME,
-            token,
-            max_age=cfg.session_ttl_seconds,
-            path="/",
-            secure=_cookie_secure(cfg),
-            httponly=True,
-            samesite="strict",
-        )
+            return response
+        log.info("login ok", ip=ip)
         return response
 
     @app.get("/api/session")
@@ -628,7 +807,8 @@ def create_app(
             )
         return JSONResponse(
             {"ok": True, "exp": claims.expires_at,
-             "username": claims.subject},
+             "username": claims.subject,
+             "client_id": claims.client_id},
             headers={"Cache-Control": "no-store"},
         )
 
@@ -663,7 +843,17 @@ def create_app(
             return JSONResponse({"ok": False}, status_code=401)
         subject = _device_subject(claims)
         records = await devices.list_for_subject(subject)
+        if claims.client_id is not None:
+            records = [
+                record for record in records
+                if await _claims_allow_machine(claims, record.machine_id, devices)
+            ]
         connected = set(hub.machine_ids)
+        if claims.client_id is not None:
+            connected = {
+                machine_id for machine_id in connected
+                if await _claims_allow_machine(claims, machine_id, devices)
+            }
         result = [
             {
                 "machine_id": record.machine_id,
@@ -682,7 +872,7 @@ def create_app(
             machine_id for machine_id in connected
             if claims.allows_machine(machine_id)
         }
-        if "*" not in claims.machines:
+        if claims.client_id is None and "*" not in claims.machines:
             visible_legacy.update(claims.machines)
         for machine_id in sorted(visible_legacy - known):
             result.append({
@@ -715,6 +905,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if claims.client_id is not None:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         grant = await devices.create_pairing(
             _device_subject(claims), ttl=cfg.device_pairing_ttl_seconds)
         return JSONResponse(
@@ -729,6 +921,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if claims.client_id is not None:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         await devices.close_pairing(_device_subject(claims))
         return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
@@ -788,6 +982,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if not await _claims_allow_machine(claims, machine_id, devices):
+            return JSONResponse({"error": "not_found"}, status_code=404)
         try:
             body = await _read_json_limited(req, _DEVICE_BODY_MAX_BYTES)
         except _BodyTooLarge:
@@ -813,6 +1009,8 @@ def create_app(
         claims = await _active_claims(req, cfg, sessions)
         if claims is None:
             return JSONResponse({"ok": False}, status_code=401)
+        if not await _claims_allow_machine(claims, machine_id, devices):
+            return JSONResponse({"error": "not_found"}, status_code=404)
         revoked = await devices.revoke(machine_id, _device_subject(claims))
         if not revoked:
             return JSONResponse({"error": "not_found"}, status_code=404)
@@ -828,12 +1026,17 @@ def create_app(
                 headers={"Cache-Control": "no-store"},
             )
         records = await devices.list_for_subject(_device_subject(claims))
+        if claims.client_id is not None:
+            records = [
+                record for record in records
+                if await _claims_allow_machine(claims, record.machine_id, devices)
+            ]
         machines = {record.machine_id for record in records}
         machines.update(
             machine_id for machine_id in hub.machine_ids
             if claims.allows_machine(machine_id)
         )
-        if "*" not in claims.machines:
+        if claims.client_id is None and "*" not in claims.machines:
             machines.update(claims.machines)
         return JSONResponse(
             {"ok": True, "machines": sorted(machines)},
@@ -930,11 +1133,17 @@ def create_app(
                 # Keep the legacy call shape for embedded relays and tests that
                 # replace the expiry guard. Named machines use the extended
                 # route-aware form below.
-                await _serve_client_until_expiry(
-                    websocket, hub, claims.expires_at, revoked)
+                if claims.client_id is None:
+                    await _serve_client_until_expiry(
+                        websocket, hub, claims.expires_at, revoked)
+                else:
+                    await _serve_client_until_expiry(
+                        websocket, hub, claims.expires_at, revoked,
+                        expected_client_id=claims.client_id)
             else:
                 await _serve_client_until_expiry(
-                    websocket, hub, claims.expires_at, revoked, machine_id)
+                    websocket, hub, claims.expires_at, revoked, machine_id,
+                    expected_client_id=claims.client_id)
 
     @app.get("/healthz")
     async def healthz() -> dict:

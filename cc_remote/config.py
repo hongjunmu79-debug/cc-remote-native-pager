@@ -107,8 +107,8 @@ class RelayConfig:
     ws_max_size_bytes: int = field(
         default_factory=lambda: _int("WS_MAX_SIZE_BYTES", 16 * 1024 * 1024)
     )
-    # Login gate: web clients POST /api/login with this password and receive a
-    # short-lived HMAC session in an HttpOnly cookie.
+    # Optional password fallback. The primary client login path is a local or
+    # already-authenticated console issuing a one-time QR pairing grant.
     login_password: str = field(default_factory=lambda: _env("LOGIN_PASSWORD", ""))
     # Optional multi-user policy. When configured it replaces LOGIN_PASSWORD:
     # {"alice":{"password":"...","machines":["mac","nono"]}}
@@ -351,9 +351,9 @@ def validate_relay_config(cfg: RelayConfig) -> None:
         parse_login_users(cfg.login_users_json)
     except ValueError as exc:
         errors.append(str(exc))
-    if not cfg.login_users_json and (
+    if cfg.login_password and not cfg.login_users_json and (
             _placeholder(cfg.login_password) or len(cfg.login_password) < 12):
-        errors.append("LOGIN_PASSWORD must be non-placeholder and at least 12 characters")
+        errors.append("LOGIN_PASSWORD must be blank or non-placeholder and at least 12 characters")
     if _placeholder(cfg.session_secret) or len(cfg.session_secret) < 32:
         errors.append("SESSION_SECRET must be non-placeholder and at least 32 characters")
     try:

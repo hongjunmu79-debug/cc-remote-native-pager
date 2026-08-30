@@ -327,8 +327,12 @@ class RelayHub:
 
     # ---- client side ----
 
-    async def serve_client(self, ws: WebSocket,
-                           machine_id: str = "default") -> None:
+    async def serve_client(
+        self,
+        ws: WebSocket,
+        machine_id: str = "default",
+        expected_client_id: str | None = None,
+    ) -> None:
         conn: Optional[ClientConn] = None
         client_id: Optional[str] = None
         slot = id(ws)
@@ -386,6 +390,9 @@ class RelayHub:
                 return
 
             client_id = msg.client_id or uuid.uuid4().hex
+            if expected_client_id is not None and client_id != expected_client_id:
+                await ws.close(code=1008, reason="client not authorized")
+                return
             msg.client_id = client_id
             conn = ClientConn(
                 ws, self.cfg.client_queue_cap, client_id,

@@ -101,8 +101,8 @@ if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
 # --- Compile the installer ----------------------------------------------------
 $iss = Join-Path $PSScriptRoot "inno\cc-remote.iss"
 $outputName = if ($OutputName) { $OutputName } else { "cc-remote-v$DistributionVersion-windows-x64-setup" }
-$setupArgs = ""
-if ($NoServices) { $setupArgs = "-NoServices" }
+$setupArgs = "-Unattended -AllowInsecureHttp"
+if ($NoServices) { $setupArgs += " -NoServices" }
 
 $defines = @(
     "/DStageDir=$stageDir",
@@ -111,7 +111,7 @@ $defines = @(
     "/DOutputDir=$outputDir",
     "/DOutputName=$outputName"
 )
-if ($setupArgs) { $defines += "/DSetupArgs=$setupArgs" }
+$defines += "/DSetupArgs=$setupArgs"
 
 Write-Step "Compiling installer with ISCC: $iscc"
 & $iscc $defines $iss

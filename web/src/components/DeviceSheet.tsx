@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import { Icon } from "../icons";
 
 export interface RemoteDevice {
@@ -43,6 +44,8 @@ export function DeviceSheet({
   const [error, setError] = useState<string | null>(null);
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [pairExpires, setPairExpires] = useState<number | null>(null);
+  const [clientQrSvg, setClientQrSvg] = useState<string | null>(null);
+  const [clientPairExpires, setClientPairExpires] = useState<number | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [label, setLabel] = useState("");
 
@@ -124,6 +127,29 @@ export function DeviceSheet({
     }
   };
 
+  const startClientPairing = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch("/api/client-pairing", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ machine_id: currentId }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const payload = await response.json();
+      if (typeof payload?.payload !== "string") throw new Error("invalid_client_pairing");
+      setClientQrSvg(await QRCode.toString(payload.payload, {
+        type: "svg", errorCorrectionLevel: "M", margin: 2, width: 280,
+      }));
+      setClientPairExpires(payload.expires_at ?? null);
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "client_pairing_failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const saveLabel = async (device: RemoteDevice) => {
     const next = label.trim();
     if (!next || next.length > 64) return;
@@ -175,6 +201,22 @@ export function DeviceSheet({
       </header>
       <div className="device-body">
         {error && <div className="device-error">{error}</div>}
+        <section className="device-client-pairing">
+          <div>
+            <b>添加手机</b>
+            <p>Android pager 扫一次二维码即可保存服务器并取得会话，无需输入域名或密码。</p>
+          </div>
+          <button disabled={loading} onClick={() => void startClientPairing()}>
+            {clientQrSvg ? "刷新二维码" : "显示二维码"}
+          </button>
+          {clientQrSvg && <div className="device-client-qr">
+            <div role="img" aria-label="cc-remote 一次性客户端配对二维码"
+              dangerouslySetInnerHTML={{ __html: clientQrSvg }} />
+            {clientPairExpires && <small>
+              一次有效 · {new Date(clientPairExpires * 1000).toLocaleTimeString()} 前
+            </small>}
+          </div>}
+        </section>
         <section className="device-pairing">
           <div>
             <b>添加设备</b>

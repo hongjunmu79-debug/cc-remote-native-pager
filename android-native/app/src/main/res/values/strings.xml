@@ -2,4 +2,6 @@
     <string name="app_name">CC Remote Pager</string>
     <string name="notification_channel_tasks">Agent 任务状态</string>
     <string name="notification_channel_tasks_description">任务完成及等待回答提醒</string>
+    <string name="qr_scanner_instruction">扫描电脑上显示的 cc-remote 配对二维码</string>
+    <string name="cancel">取消</string>
 </resources>

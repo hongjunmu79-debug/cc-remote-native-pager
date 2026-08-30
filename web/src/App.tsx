@@ -26,7 +26,7 @@ import { parseGoalCommand } from "./goal-command";
 import { shouldOpenCodexStatus } from "./status-capabilities";
 import { permsFor } from "./data";
 import { shouldAcceptSessionList } from "./session-list";
-import { clearLegacyAuthMarkers, probeSession } from "./session-auth";
+import { PAIRED_CLIENT_ID_KEY, clearLegacyAuthMarkers, probeSession, syncPairedClientId } from "./session-auth";
 import {
   canEnqueueQuery,
   collectWaitingQueries,
@@ -333,10 +333,16 @@ export default function App() {
       }
       if (result === "unauthorized") {
         clearLegacyAuthMarkers(localStorage);
+        localStorage.removeItem(PAIRED_CLIENT_ID_KEY);
         // Do not expose the login form until prior-session prompts and
         // attachments are gone. A fast login must not race cache hydration.
         try { await import("./cache").then((module) => module.clearCache()); }
         catch { /* best-effort local cleanup */ }
+        if (cancelled) return;
+      }
+      if (result === "authenticated") {
+        try { await syncPairedClientId(localStorage); }
+        catch { /* a later WS auth probe remains authoritative */ }
         if (cancelled) return;
       }
       setAuthed(result === "authenticated");
@@ -983,6 +989,7 @@ export default function App() {
         onAuthFail: () => {
           setAuthReady(false);
           clearLegacyAuthMarkers(localStorage);
+          localStorage.removeItem(PAIRED_CLIENT_ID_KEY);
           pendingCreateRef.current = null;
           createRequestsRef.current.clear();
           pendingBtwRef.current = null;
@@ -1573,6 +1580,7 @@ export default function App() {
       setForkWorktreeCreating(false);
       setForkWorktreeError(null);
       dispatch({ type: "reset" });
+      localStorage.removeItem(PAIRED_CLIENT_ID_KEY);
       setAuthed(false);
     } catch {
       dispatch({ type: "command_error", detail: "退出失败：服务暂不可用，请稍后重试" });

@@ -16,6 +16,23 @@ export type SessionFetch = (
 
 const SESSION_CHECK_TIMEOUT_MS = 5_000;
 const LEGACY_AUTH_KEYS = ["cc_remote_session", "cc_remote_authenticated"] as const;
+export const PAIRED_CLIENT_ID_KEY = "cc_remote_paired_client_id";
+
+export async function syncPairedClientId(
+  storage: Pick<Storage, "setItem" | "removeItem">,
+): Promise<void> {
+  const response = await fetch("/api/session", {
+    credentials: "same-origin", cache: "no-store",
+  });
+  if (!response.ok) return;
+  const payload = await response.json().catch(() => null);
+  const clientId = payload?.client_id;
+  if (typeof clientId === "string" && clientId.length >= 1 && clientId.length <= 128) {
+    storage.setItem(PAIRED_CLIENT_ID_KEY, clientId);
+  } else {
+    storage.removeItem(PAIRED_CLIENT_ID_KEY);
+  }
+}
 
 /**
  * HttpOnly cookies are deliberately opaque to JavaScript.  Probe the relay's

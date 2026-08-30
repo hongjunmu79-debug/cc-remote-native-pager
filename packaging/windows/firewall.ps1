@@ -36,6 +36,18 @@ Set-StrictMode -Version 2.0
 
 if (-not $InstallRoot) { $InstallRoot = Join-Path $env:LOCALAPPDATA "cc-remote" }
 
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+$isAdministrator = $principal.IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator
+)
+if (-not $isAdministrator) {
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Port $Port -InstallRoot `"$InstallRoot`""
+    if ($Remove) { $arguments += " -Remove" }
+    $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+    exit $elevated.ExitCode
+}
+
 $ruleName = "cc-remote-$Port"
 $pythonPath = Join-Path $InstallRoot "runtime\.venv\Scripts\python.exe"
 
