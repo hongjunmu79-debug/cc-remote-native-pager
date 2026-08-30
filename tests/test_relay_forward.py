@@ -176,6 +176,25 @@ def test_relay_overwrites_untrusted_client_hello_route_id():
     asyncio.run(run())
 
 
+def test_qr_session_rejects_a_different_client_id():
+    async def run():
+        cfg = SimpleNamespace(
+            client_queue_cap=4,
+            client_queue_bytes=4096,
+            max_clients=2,
+            client_hello_timeout=1,
+        )
+        hub = RelayHub(cfg)
+        ws = ScriptedWs()
+        await ws.incoming.put(serialize(Hello(
+            role="client", client_id="different-client")))
+        await hub.serve_client(ws, expected_client_id="paired-client")
+        assert ws.closed == [(1008, "client not authorized")]
+        assert hub.client_count == 0
+
+    asyncio.run(run())
+
+
 def test_client_connection_limit_has_one_bounded_reconnect_probe_slot():
     async def run():
         cfg = SimpleNamespace(

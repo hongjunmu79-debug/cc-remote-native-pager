@@ -22,6 +22,7 @@ fun PagerDashboardRoot(
     onPin: (PagerTask, Boolean) -> Unit,
     onMarkRead: (PagerTask) -> Unit,
     onUpdateEndpoint: (String) -> Unit,
+    onScanPairing: () -> Unit,
     onFeedbackEnabled: (Boolean) -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
@@ -35,6 +36,7 @@ fun PagerDashboardRoot(
             onPin = onPin,
             onMarkRead = onMarkRead,
             onUpdateEndpoint = onUpdateEndpoint,
+            onScanPairing = onScanPairing,
             onFeedbackEnabled = onFeedbackEnabled,
         )
         SnackbarHost(

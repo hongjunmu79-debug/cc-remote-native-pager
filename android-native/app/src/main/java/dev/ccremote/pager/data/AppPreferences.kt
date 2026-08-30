@@ -19,6 +19,8 @@ private val Context.nativePagerDataStore by preferencesDataStore("native_pager")
 
 data class PagerPreferences(
     val endpoint: ServerEndpoint?,
+    val pairedMachineId: String?,
+    val pairedClientId: String?,
     val seenRevisions: Map<String, String>,
     val feedbackEnabled: Boolean,
 )
@@ -140,6 +142,8 @@ class AppPreferences(
             val seen = preferences[SEEN_REVISIONS]?.let(::decodeSeen).orEmpty()
             PagerPreferences(
                 endpoint = endpoint,
+                pairedMachineId = preferences[PAIRED_MACHINE_ID],
+                pairedClientId = preferences[PAIRED_CLIENT_ID],
                 seenRevisions = seen,
                 feedbackEnabled = preferences[FEEDBACK_ENABLED] ?: true,
             )
@@ -148,9 +152,26 @@ class AppPreferences(
     suspend fun setServerUrl(value: String): Result<ServerEndpoint> {
         val endpoint = ServerEndpoint.parse(value)
         endpoint.onSuccess { accepted ->
-            context.nativePagerDataStore.edit { it[SERVER_URL] = accepted.url }
+            context.nativePagerDataStore.edit {
+                it[SERVER_URL] = accepted.url
+                it.remove(PAIRED_MACHINE_ID)
+                it.remove(PAIRED_CLIENT_ID)
+            }
         }
         return endpoint
+    }
+
+    suspend fun setClientPairing(
+        endpoint: ServerEndpoint,
+        machineId: String,
+        clientId: String,
+    ) {
+        require(machineId.length in 1..128 && clientId.length in 1..128)
+        context.nativePagerDataStore.edit {
+            it[SERVER_URL] = endpoint.url
+            it[PAIRED_MACHINE_ID] = machineId
+            it[PAIRED_CLIENT_ID] = clientId
+        }
     }
 
     suspend fun setFeedbackEnabled(enabled: Boolean) {
@@ -181,6 +202,8 @@ class AppPreferences(
 
     private companion object {
         val SERVER_URL = stringPreferencesKey("server_url")
+        val PAIRED_MACHINE_ID = stringPreferencesKey("paired_machine_id")
+        val PAIRED_CLIENT_ID = stringPreferencesKey("paired_client_id")
         val SEEN_REVISIONS = stringPreferencesKey("seen_revisions")
         val FEEDBACK_ENABLED = booleanPreferencesKey("feedback_enabled")
         val SEEN_SERIALIZER = MapSerializer(String.serializer(), String.serializer())

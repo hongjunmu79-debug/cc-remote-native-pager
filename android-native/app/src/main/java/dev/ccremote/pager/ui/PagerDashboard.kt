@@ -64,6 +64,7 @@ fun PagerDashboard(
     onPin: (PagerTask, Boolean) -> Unit,
     onMarkRead: (PagerTask) -> Unit,
     onUpdateEndpoint: (String) -> Unit,
+    onScanPairing: () -> Unit,
     onFeedbackEnabled: (Boolean) -> Unit,
 ) {
     var expandedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -114,6 +115,7 @@ fun PagerDashboard(
                 },
                 actions = {
                     TextButton(onClick = onRefresh) { Text("刷新") }
+                    TextButton(onClick = onScanPairing) { Text("扫码") }
                     TextButton(onClick = { settingsOpen = true }) { Text("设置") }
                     TextButton(onClick = onOpenChat) { Text("聊天") }
                 },
@@ -178,6 +180,10 @@ fun PagerDashboard(
             onSave = { url ->
                 onUpdateEndpoint(url)
                 settingsOpen = false
+            },
+            onScanPairing = {
+                settingsOpen = false
+                onScanPairing()
             },
             onFeedbackEnabled = onFeedbackEnabled,
         )
@@ -363,6 +369,7 @@ private fun PagerSettingsDialog(
     feedbackEnabled: Boolean,
     onDismiss: () -> Unit,
     onSave: (String) -> Unit,
+    onScanPairing: () -> Unit,
     onFeedbackEnabled: (Boolean) -> Unit,
 ) {
     var url by rememberSaveable(initialUrl) { mutableStateOf(initialUrl) }
@@ -396,6 +403,15 @@ private fun PagerSettingsDialog(
         title = { Text("原生看板设置") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Button(
+                    onClick = onScanPairing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("扫描电脑上的配对二维码") }
+                Text(
+                    "扫码会自动保存服务器与安全会话，无需输入域名或密码。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it.take(2_048) },

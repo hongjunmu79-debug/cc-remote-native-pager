@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.ccremote.pager.feedback.PagerFeedbackController
+import dev.ccremote.pager.pairing.QrScannerActivity
 import dev.ccremote.pager.ui.CCRemotePagerTheme
 import dev.ccremote.pager.ui.PagerDashboardRoot
 import dev.ccremote.pager.web.SecureWebViewController
@@ -61,6 +62,14 @@ class MainActivity : ComponentActivity() {
                 result.data,
             ),
         )
+    }
+
+    private val qrScannerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode != RESULT_OK) return@registerForActivityResult
+        result.data?.getStringExtra(QrScannerActivity.EXTRA_QR_PAYLOAD)
+            ?.let(viewModel::pairFromQr)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -153,6 +162,11 @@ class MainActivity : ComponentActivity() {
                     onPin = viewModel::setPinned,
                     onMarkRead = viewModel::markRead,
                     onUpdateEndpoint = viewModel::updateEndpoint,
+                    onScanPairing = {
+                        qrScannerLauncher.launch(
+                            Intent(this@MainActivity, QrScannerActivity::class.java),
+                        )
+                    },
                     onFeedbackEnabled = { enabled ->
                         viewModel.setFeedbackEnabled(enabled)
                         if (enabled) ensureNotificationPermission()

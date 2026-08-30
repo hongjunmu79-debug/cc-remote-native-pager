@@ -107,7 +107,7 @@ responsive web client. No public VPS, no domain, no TLS needed — traffic stays
 inside your LAN.
 
 ```
-Android pager / phone browser ──http://<windows-lan-ip>:8766──▶ Windows relay+wrapper
+Android pager / phone browser ──http://<windows-lan-ip>:8765──▶ Windows relay+wrapper
                                                                   └─ drives local claude / codex
 ```
 
@@ -115,35 +115,34 @@ Android pager / phone browser ──http://<windows-lan-ip>:8766──▶ Window
 
 ### 1) Install the Windows distribution
 
-Download the `3.0.0-pager.5` Windows installer (or portable archive) from the
-[GitHub Release](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5),
-then run `setup.ps1` (or extract the portable archive and run
-`start.ps1`). The installer:
+Download the
+[Windows x64 one-click installer](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5/cc-remote-v3.0.0-pager.5-windows-x64-setup.exe)
+and its adjacent `.sha256` file from the GitHub Release. The portable archive
+remains available for foreground use. The installer:
 
 - installs to a directory you choose (no fixed path);
 - generates strong `SESSION_SECRET` and `WRAPPER_TOKEN`;
-- asks for the web login password, machine name, default workspace, and the
-  LAN endpoint/port;
+- selects safe machine/workspace/LAN defaults without requiring a password;
 - detects `claude` and `codex` without copying their credentials;
 - writes configuration with restrictive user-only ACLs and refuses placeholder
   values;
 - registers scheduled tasks that supervise the long-lived relay/wrapper
   processes with bounded restart-on-failure;
 - creates a firewall rule limited to `LocalSubnet` on the selected port;
+- adds Start Menu/Desktop **cc-remote console** shortcuts and opens it;
 - preserves the existing configuration on upgrade and supports clean
   uninstall/rollback without touching Claude/Codex sessions or credentials.
 
 Unattended/silent installs are supported by passing a config file. See
 [packaging/windows/README.md](packaging/windows/README.md).
 
-### 2) Note the LAN endpoint
+### 2) Display the client pairing QR
 
-The installer prints the relay origin, for example `http://192.168.1.23:8766/`.
-That exact origin is what the Android app (and any browser on the LAN) will
-connect to. Verify the web client from another machine:
+The installer opens the local console. Choose **Display pairing QR**. The QR is
+short-lived, single-use, and scoped to the selected machine and new client.
 
 ```bash
-curl http://<windows-lan-ip>:8766/healthz
+curl http://<windows-lan-ip>:8765/healthz
 # expect: {"ok":true,"wrapper_connected":true,"clients":0}
 ```
 
@@ -151,20 +150,15 @@ curl http://<windows-lan-ip>:8766/healthz
 
 1. Build or download the Android APK (see the Android notes below), install it,
    and launch.
-2. First launch shows the server-entry screen — enter the relay origin
-   (`http://<windows-lan-ip>:8766/`).
-   - HTTPS root origins are always accepted.
-   - Cleartext HTTP is accepted only for explicit private/local IP literals
-     (RFC1918 `10/8`, `172.16/12`, `192.168/16`, loopback) and requires the
-     visible warning confirmation. Public HTTP, userinfo, query strings,
-     fragments, and non-root paths are rejected.
-3. Log in with the web login password you chose during installation.
+2. Tap **Scan** and scan the QR shown by the Windows console.
+3. The app validates and saves the relay origin, redeems the HttpOnly session,
+   and enters directly. Manual origin/password entry remains a fallback.
 4. The WebView owns login/WebSocket/chat; the native dashboard projects the
    same session state through the bridge. Keep one session state machine.
 
 ### 4) (Web-only alternative) use the responsive web client
 
-Open `http://<windows-lan-ip>:8766/` in any browser on the LAN and log in. The
+Open `http://<windows-lan-ip>:8765/` in any browser on the LAN and log in. The
 web client installs as a PWA and works on the phone too; the native pager adds
 the bounded dashboard projection on top.
 
@@ -188,7 +182,6 @@ install -m 600 .env.example .env    # Windows: copy .env.example .env
 Edit `.env` — at minimum:
 
 ```ini
-LOGIN_PASSWORD=<a strong password>
 SESSION_SECRET=<openssl rand -hex 32>
 WRAPPER_TOKEN=<openssl rand -hex 32>
 PUBLIC_ORIGIN=http://127.0.0.1:8765
@@ -385,7 +378,7 @@ commands:
 | Var | Default | Notes |
 |---|---|---|
 | `RELAY_HOST` / `RELAY_PORT` | `127.0.0.1` / `8765` | Listen address (behind Caddy in prod — keep 127.0.0.1; LAN setups set `0.0.0.0`). |
-| `LOGIN_PASSWORD` | empty | Single-user web login password. **Required** unless `LOGIN_USERS_JSON` is set. |
+| `LOGIN_PASSWORD` | empty | Optional single-user password fallback; normal client onboarding uses a one-time QR. |
 | `LOGIN_USERS_JSON` | empty | Optional multi-user policy; replaces `LOGIN_PASSWORD`. |
 | `SESSION_SECRET` | empty | HMAC secret to sign session tokens. **Required** (`openssl rand -hex 32`). |
 | `PUBLIC_ORIGIN` | empty | Exact browser origin allowed to connect, e.g. `https://remote.example.com`; **required**, non-loopback origins must use HTTPS unless `ALLOW_INSECURE_HTTP` is enabled. |
@@ -415,9 +408,11 @@ in total; oversized input is rejected before a model turn starts.
 
 ## Auth model
 
-- **Web client**: `POST /api/login` creates a short-lived HMAC session in an
-  **HttpOnly, SameSite=Strict** cookie. JavaScript cannot read it and no token
-  appears in the URL. The WebSocket must also pass an exact `Origin` check.
+- **Web/Android clients**: a local or already-authenticated console issues a
+  single-use QR JSON scoped to `machine_id/client_id`.
+  `POST /api/client-pairing/redeem` consumes it and creates the existing
+  **HttpOnly, SameSite=Strict** HMAC cookie. The secret never appears in a URL;
+  `POST /api/login` remains an optional password fallback.
 - **Wrapper ⇄ relay**: the WS handshake carries a machine credential. Manual
   setups use `WRAPPER_TOKEN` / `WRAPPER_TOKENS_JSON`; Device Center issues an
   independent, machine-bound, individually revocable credential. The relay

@@ -138,6 +138,18 @@ def test_validate_login_password():
     assert win_config.validate_login_password("a" * 2000) != []
 
 
+def test_first_run_accepts_blank_optional_login_password():
+    answers = win_config.FirstRunAnswers(
+        login_password="",
+        machine_name="desktop-1",
+        workspace=r"C:\Users\alice\projects",
+        public_origin="http://192.168.1.50:8765",
+        relay_port=8765,
+        allow_insecure_http=True,
+    )
+    assert win_config.validate_answers(answers) == []
+
+
 def test_validate_machine_name():
     assert win_config.validate_machine_name("desktop-1") == []
     assert win_config.validate_machine_name("DESKTOP_1.lan") == []
@@ -1103,10 +1115,25 @@ def test_inno_installer_is_a_real_installer_and_build_fails_closed():
     assert 'Filename: "powershell.exe"' in iss
     assert "setup.ps1" in iss
     assert "-InstallRoot" in iss
+    assert "[Icons]" in iss
+    assert "cc-remote 控制台" in iss
+    assert "open-console.ps1" in iss
+    assert "postinstall" in iss
+    assert "-Unattended -AllowInsecureHttp" in iss
     builder = _repo_packaging_script("build-installer.ps1")
     assert "ISCC.exe" in builder
     assert "Refusing to emit a fake installer" in builder
     assert "-NoServices" in builder
+
+
+def test_windows_console_shortcut_uses_loopback_without_url_credentials():
+    script = _repo_packaging_script("open-console.ps1")
+    assert "http://127.0.0.1:$port/" in script
+    assert "Start-ScheduledTask" in script
+    assert "token=" not in script
+    firewall = _repo_packaging_script("firewall.ps1")
+    assert "-Verb RunAs" in firewall
+    assert "-RemoteAddress LocalSubnet" in firewall
 
 
 def test_start_ps1_runs_both_concurrently_and_cleans_up():

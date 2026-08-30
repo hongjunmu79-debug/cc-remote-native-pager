@@ -23,6 +23,7 @@ class SessionClaims:
     jti: str
     subject: str | None = None
     machines: tuple[str, ...] = ("*",)
+    client_id: str | None = None
 
     def allows_machine(self, machine_id: str) -> bool:
         return "*" in self.machines or machine_id in self.machines
@@ -90,6 +91,7 @@ def make_session_token(
     jti: str | None = None,
     subject: str | None = None,
     machines: tuple[str, ...] = ("*",),
+    client_id: str | None = None,
 ) -> tuple[str, int]:
     """Sign a session token: base64(payload).base64(HMAC(payload)). Returns
     (token, exp_epoch)."""
@@ -100,6 +102,8 @@ def make_session_token(
         claims["sub"] = subject
     if machines != ("*",):
         claims["machines"] = list(machines)
+    if client_id is not None:
+        claims["client_id"] = client_id
     payload = base64.urlsafe_b64encode(
         json.dumps(claims, separators=(",", ":")).encode()
     ).decode()
@@ -132,6 +136,7 @@ def session_token_claims(token: str, secret: str) -> Optional[SessionClaims]:
         jti = data.get("jti") if isinstance(data, dict) else None
         subject = data.get("sub") if isinstance(data, dict) else None
         machines = data.get("machines", ["*"]) if isinstance(data, dict) else None
+        client_id = data.get("client_id") if isinstance(data, dict) else None
         if isinstance(expiry, bool) or not isinstance(expiry, int):
             return None
         if not isinstance(jti, str) or not (16 <= len(jti) <= 128):
@@ -150,11 +155,17 @@ def session_token_claims(token: str, secret: str) -> Optional[SessionClaims]:
             return None
         if "*" in normalized and normalized != ("*",):
             return None
+        if client_id is not None and (
+                not isinstance(client_id, str)
+                or not (1 <= len(client_id) <= 128)
+                or any(ord(char) < 32 for char in client_id)):
+            return None
         return SessionClaims(
             expires_at=expiry,
             jti=jti,
             subject=subject,
             machines=normalized,
+            client_id=client_id,
         )
     except Exception:
         return None

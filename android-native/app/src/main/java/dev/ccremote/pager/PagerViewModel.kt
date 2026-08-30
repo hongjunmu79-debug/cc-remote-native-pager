@@ -2,6 +2,7 @@ package dev.ccremote.pager
 
 import android.app.Application
 import android.os.SystemClock
+import android.webkit.CookieManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ccremote.pager.bridge.NativeBridgeRepository
@@ -12,6 +13,8 @@ import dev.ccremote.pager.data.AppPreferences
 import dev.ccremote.pager.data.ServerEndpoint
 import dev.ccremote.pager.domain.PagerLifecycle
 import dev.ccremote.pager.domain.PagerTask
+import dev.ccremote.pager.pairing.ClientPairingClient
+import dev.ccremote.pager.pairing.ClientPairingPayload
 import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -23,6 +26,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 enum class PagerScreen {
     CHAT,
@@ -53,6 +60,7 @@ data class PagerUiState(
     val wrapperOnline: Boolean = false,
     val machineId: String = "",
     val endpoint: ServerEndpoint? = null,
+    val pairedMachineId: String? = null,
     val feedbackEnabled: Boolean = true,
     val preferencesLoaded: Boolean = false,
 )
@@ -65,6 +73,7 @@ sealed interface PagerUiEvent {
 class PagerViewModel(application: Application) : AndroidViewModel(application) {
     val bridge = NativeBridgeRepository(elapsedRealtime = SystemClock::elapsedRealtime)
     private val preferences = AppPreferences(application.applicationContext)
+    private val pairingClient = ClientPairingClient()
     // Null until the first explicit navigation: the effective screen is resolved
     // from the configured endpoint, so a fresh install (no endpoint) lands on the
     // dashboard instead of a blank WebView.
@@ -108,6 +117,7 @@ class PagerViewModel(application: Application) : AndroidViewModel(application) {
             wrapperOnline = snapshot?.wrapperOnline == true,
             machineId = snapshot?.machineId.orEmpty(),
             endpoint = preferenceState.endpoint,
+            pairedMachineId = preferenceState.pairedMachineId,
             feedbackEnabled = preferenceState.feedbackEnabled,
             preferencesLoaded = true,
         )
@@ -205,6 +215,43 @@ class PagerViewModel(application: Application) : AndroidViewModel(application) {
                         PagerUiEvent.Message(error.message ?: "服务器地址无效"),
                     )
                 }
+        }
+    }
+
+    fun pairFromQr(raw: String) {
+        viewModelScope.launch {
+            val payload = ClientPairingPayload.parse(raw).getOrElse { error ->
+                mutableEvents.emit(PagerUiEvent.Message(error.message ?: "配对二维码无效"))
+                return@launch
+            }
+            mutableEvents.emit(PagerUiEvent.Message("正在安全配对…"))
+            val redeemed = withContext(Dispatchers.IO) {
+                pairingClient.redeem(payload)
+            }.getOrElse { error ->
+                mutableEvents.emit(PagerUiEvent.Message(error.message ?: "配对失败"))
+                return@launch
+            }
+            val cookieStored = suspendCoroutine { continuation ->
+                CookieManager.getInstance().setCookie(
+                    redeemed.endpoint.url,
+                    redeemed.cookie,
+                ) { accepted -> continuation.resume(accepted) }
+            }
+            if (!cookieStored) {
+                mutableEvents.emit(PagerUiEvent.Message("无法保存安全会话，请更新 Android WebView"))
+                return@launch
+            }
+            CookieManager.getInstance().flush()
+            preferences.setClientPairing(
+                redeemed.endpoint,
+                redeemed.machineId,
+                redeemed.clientId,
+            )
+            bridge.reset()
+            pendingCommands.clear()
+            automaticDashboardShown = false
+            screen.value = PagerScreen.CHAT
+            mutableEvents.emit(PagerUiEvent.Message("配对成功"))
         }
     }
 

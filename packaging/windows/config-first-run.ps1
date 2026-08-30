@@ -23,7 +23,7 @@
     Install root. Config is written to <InstallRoot>\config\.env.
 
 .PARAMETER LoginPassword
-    Web login password (min 16 chars). Prompted when omitted.
+    Optional fallback Web login password (min 16 chars when provided).
 
 .PARAMETER MachineName
     Unique machine id for this wrapper (used as CC_REMOTE_MACHINE_ID).
@@ -174,8 +174,8 @@ if (-not $MachineName) { $MachineName = $seed["CC_REMOTE_MACHINE_ID"] }
 if (-not $MachineName -and $seed["MACHINE_NAME"]) { $MachineName = $seed["MACHINE_NAME"] }
 if (-not $MachineName) {
     $default = $env:COMPUTERNAME
-    if ($Unattended) { throw "missing required value: MachineName" }
-    $MachineName = Read-NonEmpty -Prompt "Machine name (unique id for this wrapper)" -Default $default
+    if ($Unattended) { $MachineName = $default }
+    else { $MachineName = Read-NonEmpty -Prompt "Machine name (unique id for this wrapper)" -Default $default }
 }
 
 if (-not $Workspace) { $Workspace = $seed["CC_CWD"] }
@@ -189,23 +189,19 @@ if (-not $Workspace) {
     )
     $default = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $default) { $default = $candidates[0] }
-    if ($Unattended) { throw "missing required value: Workspace" }
-    $Workspace = Read-NonEmpty -Prompt "Default workspace (absolute path, used for new sessions)" -Default $default
+    if ($Unattended) { $Workspace = $default }
+    else { $Workspace = Read-NonEmpty -Prompt "Default workspace (absolute path, used for new sessions)" -Default $default }
 }
 
 if (-not $PublicOrigin) { $PublicOrigin = $seed["PUBLIC_ORIGIN"] }
 if (-not $PublicOrigin) {
     $lanIp = Get-LanIpCandidate
-    $default = if ($lanIp) { "http://$lanIp`:8765" } else { "http://192.168.1.50:8765" }
-    if ($Unattended) { throw "missing required value: PublicOrigin" }
-    $PublicOrigin = Read-NonEmpty -Prompt "Public origin (http://LAN-IP:8765 or https://your-domain)" -Default $default
+    $default = if ($lanIp) { "http://$lanIp`:$RelayPort" } else { "http://127.0.0.1`:$RelayPort" }
+    if ($Unattended) { $PublicOrigin = $default }
+    else { $PublicOrigin = Read-NonEmpty -Prompt "Public origin (http://LAN-IP:8765 or https://your-domain)" -Default $default }
 }
 
 if (-not $LoginPassword) { $LoginPassword = $seed["LOGIN_PASSWORD"] }
-if (-not $LoginPassword) {
-    if ($Unattended) { throw "missing required value: LoginPassword" }
-    $LoginPassword = Read-Password -Prompt "Web login password (minimum 16 characters)"
-}
 
 if ($seed["RELAY_PORT"]) {
     $parsedPort = 0
@@ -294,5 +290,5 @@ if ($LASTEXITCODE -ne 0) { throw "failed to restrict ACLs on $configDir" }
 
 Write-Step "Wrote config to $envPath"
 Write-Step "Machine id: $MachineName  |  Public origin: $PublicOrigin  |  Relay port: $RelayPort"
-Write-Step "Login password, SESSION_SECRET, and WRAPPER_TOKEN were generated fresh."
+Write-Step "SESSION_SECRET and WRAPPER_TOKEN were generated fresh. LOGIN_PASSWORD is an optional fallback."
 exit 0

@@ -14,14 +14,15 @@ Quick start
 
            powershell -NoProfile -ExecutionPolicy Bypass -File start-portable.ps1
 
-    3. On the very first run you will be asked for the LAN settings and a web
-       login password (minimum 16 characters). The wizard also creates a
+    3. On the very first run you will be asked for the LAN settings. A web
+       login password is an optional fallback; normal onboarding uses the
+       one-time QR shown by the local Web console. The wizard also creates a
        private runtime venv under runtime\.venv using the bundled uv.exe and
        the pinned requirements.lock — this is the only step that needs network
        access.
 
-The web UI opens at http://<this-machine-lan-ip>:8765. Log in with the
-password you chose. Point the mobile app at the same origin.
+The web UI opens at http://<this-machine-lan-ip>:8765. Open it locally, display
+the pairing QR, then scan it from the Android pager.
 
 What it runs
 ------------
