@@ -15,15 +15,15 @@ from pathlib import Path
 
 import pytest
 
-from packaging.windows import win_build, win_config, win_layout, win_manifest, win_smoke
+from cc_portable_control.windows import win_build, win_config, win_layout, win_manifest, win_smoke
 
-METADATA = {
+METADATA = \{
     "schema": 1,
     "product_version": "3.0.0",
     "distribution_version": "3.0.0-pager.5",
     "protocol": 19,
-    "repository": {"owner": "hongjunmu79-debug", "name": "cc-remote-native-pager"},
-    "android": {"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.5", "version_code": 30014},
+    "repository": \{"owner": "hongjunmu79-debug", "name": "cc-remote-native-pager"},
+    "android": \{"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.5", "version_code": 30014},
 }
 
 
@@ -51,8 +51,8 @@ def make_source_tree(root: Path) -> None:
     # Dev leftovers that must never reach the payload.
     (root / "tests").mkdir(exist_ok=True)
     (root / "tests" / "test_smoke.py").write_text("pass\n", encoding="utf-8")
-    (root / "packaging").mkdir(exist_ok=True)
-    (root / "packaging" / "dev-only.txt").write_text("x\n", encoding="utf-8")
+    (root / "cc_portable_control").mkdir(exist_ok=True)
+    (root / "cc_portable_control" / "dev-only.txt").write_text("x\n", encoding="utf-8")
     (root / "web" / "dist" / "__pycache__").mkdir(exist_ok=True)
     (root / "web" / "dist" / "__pycache__" / "x.pyc").write_bytes(b"\x00")
 
@@ -77,11 +77,11 @@ def make_distribution(dist: Path, *, git_sha: str = "0" * 40) -> Path:
     return dist
 
 
-def _packaging_source_with_leftovers(root: Path) -> Path:
-    """A ``packaging/windows``-shaped source tree carrying dev leftovers.
+def _cc_portable_control_source_with_leftovers(root: Path) -> Path:
+    """A ``cc_portable_control/windows``-shaped source tree carrying dev leftovers.
 
     The leftovers mirror what a real build host accumulates: running the Python
-    packaging scripts generates ``packaging/windows/__pycache__/*.pyc`` (the
+    cc_portable_control scripts generates ``cc_portable_control/windows/__pycache__/*.pyc`` (the
     Inno log of manual Release run 33125872590 showed exactly these being
     packed), plus stale top-level bytecode and OS junk.
     """
@@ -233,7 +233,7 @@ def test_validate_public_origin():
 def test_dotenv_value_round_trips_windows_paths():
     value = r"C:\Users\alice\projects\my folder"
     quoted = win_config._dotenv_value(value)
-    parsed = win_config.parse_env_file(f"KEY={quoted}\n")
+    parsed = win_config.parse_env_file(f"KEY=\{quoted}\n")
     assert parsed["KEY"] == value
     assert win_config._dotenv_value("simple") == "simple"
 
@@ -409,7 +409,7 @@ def test_sha256_and_sha256sums(tmp_path: Path):
     digest = win_layout.sha256_of(path)
     assert digest == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     sums = win_layout.write_sha256sums(tmp_path, [path], relroot=tmp_path)
-    assert sums.read_text(encoding="utf-8").strip() == f"{digest}  a.txt"
+    assert sums.read_text(encoding="utf-8").strip() == f"\{digest}  a.txt"
 
 
 def test_is_absolute_windows_path_and_layout_leaf(tmp_path: Path):
@@ -501,7 +501,7 @@ def test_stage_payload_filters_dev_leftovers(tmp_path: Path):
     assert (destination / "LICENSE").is_file()
     assert (destination / "requirements.lock").is_file()
     assert not (destination / "tests").exists()
-    assert not (destination / "packaging").exists()
+    assert not (destination / "cc_portable_control").exists()
     assert not any(path.suffix == ".pyc" for path in destination.rglob("*"))
 
 
@@ -550,9 +550,9 @@ def test_find_forbidden_entries_covers_dirs_files_and_junk(tmp_path: Path):
     # rule sets the manifest walker and clean-copy helper enforce: forbidden
     # directories, bytecode files, and OS junk — anywhere in the tree.
     tree = tmp_path / "tree"
-    (tree / "packaging" / "windows").mkdir(parents=True)
-    (tree / "packaging" / "windows" / "__pycache__").mkdir()
-    (tree / "packaging" / "windows" / "__pycache__" / "x.pyc").write_bytes(b"\x00")
+    (tree / "cc_portable_control" / "windows").mkdir(parents=True)
+    (tree / "cc_portable_control" / "windows" / "__pycache__").mkdir()
+    (tree / "cc_portable_control" / "windows" / "__pycache__" / "x.pyc").write_bytes(b"\x00")
     (tree / "payload").mkdir()
     (tree / "payload" / "junk.pyo").write_bytes(b"\x00")
     (tree / "payload" / ".DS_Store").write_bytes(b"\x00")
@@ -576,12 +576,12 @@ def test_find_forbidden_entries_flags_symlinks(tmp_path: Path):
 
 
 def test_find_forbidden_entries_accepts_clean_extracted_release(tmp_path: Path):
-    # A clean extracted archive root (setup.ps1 + packaging/windows + payload)
+    # A clean extracted archive root (setup.ps1 + cc_portable_control/windows + payload)
     # has no forbidden entries anywhere.
     tree = tmp_path / "tree"
-    (tree / "packaging" / "windows").mkdir(parents=True)
-    (tree / "packaging" / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
-    (tree / "packaging" / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
+    (tree / "cc_portable_control" / "windows").mkdir(parents=True)
+    (tree / "cc_portable_control" / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
+    (tree / "cc_portable_control" / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
     (tree / "payload" / "cc_remote").mkdir(parents=True)
     (tree / "payload" / "cc_remote" / "__init__.py").write_text("x\n", encoding="utf-8")
     (tree / "setup.ps1").write_text("# setup\n", encoding="utf-8")
@@ -735,11 +735,11 @@ def test_smoke_cli_explicit_temp_is_preserved(
 
 def test_smoke_check_tree_cli_detects_forbidden_entries(tmp_path: Path):
     repo_root = Path(__file__).resolve().parents[1]
-    win_smoke_py = repo_root / "packaging/windows/win_smoke.py"
+    win_smoke_py = repo_root / "cc_portable_control/windows/win_smoke.py"
 
     clean = tmp_path / "clean-tree"
-    (clean / "packaging" / "windows").mkdir(parents=True)
-    (clean / "packaging" / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
+    (clean / "cc_portable_control" / "windows").mkdir(parents=True)
+    (clean / "cc_portable_control" / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
     (clean / "payload" / "cc_remote").mkdir(parents=True)
     (clean / "payload" / "cc_remote" / "__init__.py").write_text("x\n", encoding="utf-8")
     proc = subprocess.run(
@@ -750,8 +750,8 @@ def test_smoke_check_tree_cli_detects_forbidden_entries(tmp_path: Path):
     assert "tree check passed" in proc.stdout
 
     dirty = tmp_path / "dirty-tree"
-    (dirty / "packaging" / "windows" / "__pycache__").mkdir(parents=True)
-    (dirty / "packaging" / "windows" / "__pycache__" / "win_config.cpython-314.pyc").write_bytes(b"\x00")
+    (dirty / "cc_portable_control" / "windows" / "__pycache__").mkdir(parents=True)
+    (dirty / "cc_portable_control" / "windows" / "__pycache__" / "win_config.cpython-314.pyc").write_bytes(b"\x00")
     (dirty / "payload").mkdir()
     (dirty / "payload" / "junk.pyc").write_bytes(b"\x00")
     proc = subprocess.run(
@@ -787,12 +787,12 @@ def _stage_and_build_archive(tmp_path: Path, epoch: int, name: str = "cc-remote-
     # previous call's distribution-manifest.json/SHA256SUMS — the same
     # guarantee build.ps1 gives by removing its staging root between runs.
     stem = Path(name).stem
-    source = tmp_path / f"source-{stem}"
+    source = tmp_path / f"source-\{stem}"
     make_source_tree(source)
-    payload = tmp_path / f"payload-{stem}"
+    payload = tmp_path / f"payload-\{stem}"
     win_manifest.stage_payload(source, payload)
     build_fake_distribution(payload)
-    packaging = tmp_path / "packaging"
+    packaging = tmp_path / "cc_portable_control"
     (packaging / "windows").mkdir(parents=True, exist_ok=True)
     (packaging / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
     (packaging / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
@@ -837,8 +837,8 @@ def test_build_release_archive_contents(tmp_path: Path):
     with zipfile.ZipFile(archive.path) as handle:
         names = set(handle.namelist())
         assert "setup.ps1" in names
-        assert "packaging/__init__.py" in names
-        assert "packaging/windows/install.ps1" in names
+        assert "cc_portable_control/__init__.py" in names
+        assert "cc_portable_control/windows/install.ps1" in names
         assert "payload/distribution-manifest.json" in names
         assert "payload/cc_remote/__init__.py" in names
         assert "payload/web/dist/index.html" in names
@@ -846,18 +846,18 @@ def test_build_release_archive_contents(tmp_path: Path):
 
 def test_build_ps1_clean_copy_cli_filters_packaging_leftovers(tmp_path: Path):
     # The exact production staging step build.ps1 uses: ``win_manifest.py
-    # --copy --source packaging/windows --destination <stage>/packaging/windows``.
+    # --copy --source cc_portable_control/windows --destination <stage>/cc_portable_control/windows``.
     # Seeded dev leftovers (the Inno log of manual Release run 33125872590
-    # showed packaging/windows/__pycache__/*.pyc being packed) must never reach
+    # showed cc_portable_control/windows/__pycache__/*.pyc being packed) must never reach
     # the staged tree.
-    source = _packaging_source_with_leftovers(tmp_path)
+    source = _cc_portable_control_source_with_leftovers(tmp_path)
     dest = tmp_path / "staged-packaging"
     dest.mkdir()
     repo_root = Path(__file__).resolve().parents[1]
     proc = subprocess.run(
         [
             sys.executable,
-            str(repo_root / "packaging/windows/win_manifest.py"),
+            str(repo_root / "cc_portable_control/windows/win_manifest.py"),
             "--copy",
             "--source", str(source),
             "--destination", str(dest),
@@ -875,12 +875,12 @@ def test_build_ps1_clean_copy_cli_filters_packaging_leftovers(tmp_path: Path):
 
 
 def test_release_archives_never_carry_packaging_dev_leftovers(tmp_path: Path):
-    # Both zip deliverables embed packaging/windows; a leftover that survived
-    # the clean-copy would show up in the archive's packaging layer, not just
+    # Both zip deliverables embed cc_portable_control/windows; a leftover that survived
+    # the clean-copy would show up in the archive's cc_portable_control layer, not just
     # the payload subtree the smoke verifies.
     import zipfile
 
-    source = _packaging_source_with_leftovers(tmp_path)
+    source = _cc_portable_control_source_with_leftovers(tmp_path)
     packaging = tmp_path / "staged-packaging"
     win_manifest.copy_distribution(source, packaging)
 
@@ -910,7 +910,7 @@ def test_release_archives_never_carry_packaging_dev_leftovers(tmp_path: Path):
     for archive in (installer, portable):
         with zipfile.ZipFile(archive.path) as handle:
             names = handle.namelist()
-        assert "packaging/windows/setup.ps1" in names
+        assert "cc_portable_control/windows/setup.ps1" in names
         assert not any(
             "__pycache__" in name
             or name.endswith((".pyc", ".pyo"))
@@ -925,7 +925,7 @@ def test_release_archives_never_carry_packaging_dev_leftovers(tmp_path: Path):
 
 
 def _repo_packaging_script(name: str) -> str:
-    path = Path(__file__).resolve().parents[1] / "packaging" / "windows" / name
+    path = Path(__file__).resolve().parents[1] / "cc_portable_control" / "windows" / name
     return path.read_text(encoding="utf-8")
 
 
@@ -936,7 +936,7 @@ def test_installer_wires_cc_remote_import_path_for_the_venv():
     # root IS the payload content (win_manifest --copy copies payload/* into
     # releases\<version>/*), so the .pth must point at the junction itself,
     # which retargets on upgrade and rollback. The .pth mechanism keeps
-    # packaging/ out of the app process (no shadowing of the venv's installed
+    # cc_portable_control/ out of the app process (no shadowing of the venv's installed
     # `packaging` distribution).
     script = _repo_packaging_script("install.ps1")
     assert "cc_remote_release.pth" in script
@@ -958,7 +958,7 @@ def test_supervisor_and_start_invoke_python_m_modules():
 
 
 def test_payload_never_contains_the_packaging_package():
-    # If a staged payload ever carried a top-level `packaging/` dir, the app's
+    # If a staged payload ever carried a top-level `cc_portable_control/` dir, the app's
     # sys.path (which includes the current release via the .pth) could shadow
     # the venv's installed `packaging` distribution and break deps that import
     # packaging.version (e.g. pydantic). stage_payload must keep it out.
@@ -969,11 +969,11 @@ def test_payload_never_contains_the_packaging_package():
     dest = Path(tempfile.mkdtemp())
     try:
         make_source_tree(source)
-        (source / "packaging" / "__init__.py").write_text(
+        (source / "cc_portable_control" / "__init__.py").write_text(
             "import packaging.version\n", encoding="utf-8"
         )
         win_manifest.stage_payload(source, dest)
-        assert not (dest / "packaging").exists()
+        assert not (dest / "cc_portable_control").exists()
         assert (dest / "cc_remote").is_dir()
     finally:
         shutil.rmtree(source, ignore_errors=True)
@@ -991,12 +991,12 @@ def _stage_and_build_portable_archive(
     name: str = "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip",
 ) -> tuple[Path, win_build.ReleaseArchive]:
     stem = Path(name).stem
-    source = tmp_path / f"source-{stem}"
+    source = tmp_path / f"source-\{stem}"
     make_source_tree(source)
-    payload = tmp_path / f"payload-{stem}"
+    payload = tmp_path / f"payload-\{stem}"
     win_manifest.stage_payload(source, payload)
     build_fake_distribution(payload)
-    packaging = tmp_path / "packaging"
+    packaging = tmp_path / "cc_portable_control"
     (packaging / "windows").mkdir(parents=True, exist_ok=True)
     (packaging / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
     (packaging / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
@@ -1026,8 +1026,8 @@ def test_build_portable_archive_contents(tmp_path: Path):
         names = set(handle.namelist())
         assert "start-portable.ps1" in names
         assert "README-portable.txt" in names
-        assert "packaging/__init__.py" in names
-        assert "packaging/windows/install.ps1" in names
+        assert "cc_portable_control/__init__.py" in names
+        assert "cc_portable_control/windows/install.ps1" in names
         assert "payload/distribution-manifest.json" in names
         assert "payload/cc_remote/__init__.py" in names
         assert "payload/web/dist/index.html" in names
@@ -1055,7 +1055,7 @@ def test_portable_archive_requires_start_portable(tmp_path: Path):
     payload = tmp_path / "payload"
     win_manifest.stage_payload(source, payload)
     build_fake_distribution(payload)
-    packaging = tmp_path / "packaging"
+    packaging = tmp_path / "cc_portable_control"
     (packaging / "windows").mkdir(parents=True, exist_ok=True)
     with pytest.raises(win_build.BuildError):
         win_build.build_portable_archive(
@@ -1102,15 +1102,15 @@ def test_config_first_run_accepts_static_dir():
 
 def test_inno_installer_is_a_real_installer_and_build_fails_closed():
     # The .iss must produce a genuine installer: it extracts setup.ps1 + the
-    # packaging scripts + the verified payload and RUNS setup.ps1, so the exe
+    # cc_portable_control scripts + the verified payload and RUNS setup.ps1, so the exe
     # can never drift from install.ps1. The compiler wrapper fails (never
     # fakes) when ISCC.exe is absent.
-    iss = _repo_file("packaging/windows/inno/cc-remote.iss")
+    iss = _repo_file("cc_portable_control/windows/inno/cc-remote.iss")
     assert "[Setup]" in iss
     assert "OutputBaseFilename={#OutputName}" in iss
     assert "DistVersion" in iss
     assert 'Source: "{#StageDir}\\setup.ps1"' in iss
-    assert 'Source: "{#StageDir}\\packaging\\*"' in iss
+    assert 'Source: "{#StageDir}\\cc_portable_control\\*"' in iss
     assert 'Source: "{#StageDir}\\payload\\*"' in iss
     assert 'Filename: "powershell.exe"' in iss
     assert "setup.ps1" in iss
@@ -1172,7 +1172,7 @@ def test_uninstall_rollback_is_transactional():
         for index, line in enumerate(lines):
             if sub in line:
                 return index
-        raise AssertionError(f"missing {sub!r} in uninstall.ps1")
+        raise AssertionError(f"missing \{sub!r} in uninstall.ps1")
 
     assert find("pip install") < find("-Target $prevDir")
     assert find("register-tasks.ps1") < find("Test-SupervisedHealth")
@@ -1195,10 +1195,10 @@ def test_build_ps1_produces_three_artifacts():
 
 
 def test_build_ps1_stages_packaging_via_clean_copy_not_raw_copy():
-    # build.ps1 must stage packaging/windows through the canonical clean-copy
+    # build.ps1 must stage cc_portable_control/windows through the canonical clean-copy
     # helper (win_manifest.py --copy), which filters __pycache__/.pyc/pyo and
     # OS junk and fails closed on symlinks. The old recursive Copy-Item shipped
-    # packaging/windows/__pycache__/*.pyc into both zips and the Inno Setup
+    # cc_portable_control/windows/__pycache__/*.pyc into both zips and the Inno Setup
     # .exe (manual Release run 33125872590).
     script = _repo_packaging_script("build.ps1")
     assert "--copy" in script
@@ -1209,7 +1209,7 @@ def test_build_ps1_stages_packaging_via_clean_copy_not_raw_copy():
 
 def test_release_verify_contract_scans_extracted_tree_for_forbidden_entries():
     # The release verify step smokes each extracted payload AND scans the whole
-    # extracted archive for forbidden entries (--check-tree), so a packaging-
+    # extracted archive for forbidden entries (--check-tree), so a cc_portable_control-
     # layer leftover can never slip past the payload-only clean-install smoke.
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
@@ -1240,7 +1240,7 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
     script = _repo_packaging_script("build.ps1")
     assert "Set-StrictMode -Version 2.0" in script
     assert "Split-Path -Leaf $path" in script
-    assert "${path}.sha256" in script
+    assert "$\{path}.sha256" in script
     # Root-cause guard for the run-33120966288 failure: Invoke-ArchiveAssembly
     # captures the subprocess stdout that used to leak into the return value.
     assert "$buildOutput = & $python" in script
@@ -1257,12 +1257,12 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
             "$paths = @("
             "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64.zip', "
             "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64-portable.zip');"
-            "$leaves = foreach ($p in $paths) { Split-Path -Leaf $p };"
+            "$leaves = foreach ($p in $paths) \{ Split-Path -Leaf $p };"
             "if ($leaves[0] -ne 'cc-remote-v3.0.0-pager.5-windows-x64.zip') "
-            "{ throw 'leaf0 mismatch' };"
+            "\{ throw 'leaf0 mismatch' };"
             "if ($leaves[1] -ne "
             "'cc-remote-v3.0.0-pager.5-windows-x64-portable.zip') "
-            "{ throw 'leaf1 mismatch' };"
+            "\{ throw 'leaf1 mismatch' };"
             "Write-Output 'strict-mode split-path ok'",
         ],
         capture_output=True,
@@ -1279,14 +1279,14 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
 
 
 def _stage_distribution_for_ps1_cli(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
-    """Stage a real distribution payload and a minimal packaging tree so a
+    """Stage a real distribution payload and a minimal cc_portable_control tree so a
     PowerShell probe can drive the real win_build.py CLI end to end."""
     source = tmp_path / "source"
     make_source_tree(source)
     payload = tmp_path / "payload"
     win_manifest.stage_payload(source, payload)
     build_fake_distribution(payload)
-    packaging = tmp_path / "packaging"
+    packaging = tmp_path / "cc_portable_control"
     (packaging / "windows").mkdir(parents=True, exist_ok=True)
     (packaging / "__init__.py").write_text('"""pkg"""\n', encoding="utf-8")
     (packaging / "windows" / "install.ps1").write_text("# install\n", encoding="utf-8")
@@ -1322,14 +1322,14 @@ $ErrorActionPreference = "Stop"
 # resolve even when command autoloading is unreliable.
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 
-function Get-Sha256Hex {
+function Get-Sha256Hex \{
     param([string]$Path)
     # Lowercase hex, the same format build.ps1 writes into the .sha256 sidecars.
     $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
+    try \{
         $bytes = [System.IO.File]::ReadAllBytes($Path)
         $hash = $sha.ComputeHash($bytes)
-    } finally {
+    } finally \{
         $sha.Dispose()
     }
     return [System.BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
@@ -1337,11 +1337,11 @@ function Get-Sha256Hex {
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
-# Mirror of packaging\windows\build.ps1's Invoke-ArchiveAssembly: win_build.py
+# Mirror of cc_portable_control\windows\build.ps1's Invoke-ArchiveAssembly: win_build.py
 # prints the assembled path on stdout, so the call MUST capture it. A leaked
 # stdout line made the return value a 2-element array and corrupted the
 # sidecar loop on the real runner (manual Release run 33120966288).
-function Invoke-ArchiveAssembly {
+function Invoke-ArchiveAssembly \{
     param([string]$Name, [string[]]$ExtraArgs)
     $archivePath = Join-Path $OutputDir $Name
     $buildOutput = & $Python $WinBuildPy `
@@ -1351,7 +1351,7 @@ function Invoke-ArchiveAssembly {
         --source-date-epoch 0 `
         --git-sha '0000000000000000000000000000000000000000' `
         @ExtraArgs
-    if ($LASTEXITCODE -ne 0) { throw "archive assembly failed: $Name" }
+    if ($LASTEXITCODE -ne 0) \{ throw "archive assembly failed: $Name" }
     return $archivePath
 }
 
@@ -1362,36 +1362,36 @@ $portableArchivePath = Invoke-ArchiveAssembly `
     -Name 'cc-remote-v3.0.0-pager.5-windows-x64-portable.zip' `
     -ExtraArgs @('--portable', '--start-portable', $StartPortable, '--readme', $Readme)
 
-if (@($installerArchivePath).Count -ne 1) { throw "installer path is not a scalar (stdout leaked)" }
-if (@($portableArchivePath).Count -ne 1) { throw "portable path is not a scalar (stdout leaked)" }
+if (@($installerArchivePath).Count -ne 1) \{ throw "installer path is not a scalar (stdout leaked)" }
+if (@($portableArchivePath).Count -ne 1) \{ throw "portable path is not a scalar (stdout leaked)" }
 
-foreach ($path in @($installerArchivePath, $portableArchivePath)) {
-    if ($path -isnot [string]) { throw "archive path is not a scalar string: $path" }
+foreach ($path in @($installerArchivePath, $portableArchivePath)) \{
+    if ($path -isnot [string]) \{ throw "archive path is not a scalar string: $path" }
     $leaf = Split-Path -Leaf $path
     $sha = Get-Sha256Hex $path
     $size = (Get-Item $path).Length
-    if ($size -lt 1) { throw "archive is not a real file: $leaf" }
-    Set-Content -Path "${path}.sha256" -Value "$sha  $leaf" -Encoding ascii
+    if ($size -lt 1) \{ throw "archive is not a real file: $leaf" }
+    Set-Content -Path "$\{path}.sha256" -Value "$sha  $leaf" -Encoding ascii
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-foreach ($path in @($installerArchivePath, $portableArchivePath)) {
+foreach ($path in @($installerArchivePath, $portableArchivePath)) \{
     $leaf = Split-Path -Leaf $path
-    $sidecar = "${path}.sha256"
-    if (-not (Test-Path $sidecar)) { throw "missing sidecar for $leaf" }
+    $sidecar = "$\{path}.sha256"
+    if (-not (Test-Path $sidecar)) \{ throw "missing sidecar for $leaf" }
     $expectedSha = Get-Sha256Hex $path
     $content = (Get-Content -Path $sidecar -Raw).Trim()
-    if ($content -ne "$expectedSha  $leaf") { throw "sidecar content mismatch for ${leaf}: [$content]" }
+    if ($content -ne "$expectedSha  $leaf") \{ throw "sidecar content mismatch for $\{leaf}: [$content]" }
     $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
-    try {
-        if ($zip.Entries.Count -le 0) { throw "archive is empty: $leaf" }
-        $names = @($zip.Entries | ForEach-Object { $_.FullName })
-        if ($leaf -like '*portable*') {
-            if ($names -notcontains 'start-portable.ps1') { throw "portable zip missing start-portable.ps1" }
-        } else {
-            if ($names -notcontains 'setup.ps1') { throw "installer zip missing setup.ps1" }
+    try \{
+        if ($zip.Entries.Count -le 0) \{ throw "archive is empty: $leaf" }
+        $names = @($zip.Entries | ForEach-Object \{ $_.FullName })
+        if ($leaf -like '*portable*') \{
+            if ($names -notcontains 'start-portable.ps1') \{ throw "portable zip missing start-portable.ps1" }
+        } else \{
+            if ($names -notcontains 'setup.ps1') \{ throw "installer zip missing setup.ps1" }
         }
-    } finally {
+    } finally \{
         $zip.Dispose()
     }
 }
@@ -1417,7 +1417,7 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
             "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", str(probe),
             "-Python", sys.executable,
-            "-WinBuildPy", str(repo_root / "packaging/windows/win_build.py"),
+            "-WinBuildPy", str(repo_root / "cc_portable_control/windows/win_build.py"),
             "-Packaging", str(packaging),
             "-Payload", str(payload),
             "-Setup", str(setup),
@@ -1429,7 +1429,7 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
         text=True,
         timeout=180,
     )
-    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert proc.returncode == 0, f"stdout=\{proc.stdout!r} stderr=\{proc.stderr!r}"
     assert "archive-loop ok" in proc.stdout
     zips = sorted(p.name for p in output_dir.glob("*.zip"))
     assert zips == [
@@ -1437,13 +1437,13 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
         "cc-remote-v3.0.0-pager.5-windows-x64.zip",
     ]
     for zip_name in zips:
-        sidecar = output_dir / f"{zip_name}.sha256"
+        sidecar = output_dir / f"\{zip_name}.sha256"
         assert sidecar.is_file()
         # Exact sidecar contract, verified from Python's independent SHA-256
         # oracle: a consistently-wrong hash helper in the probe cannot pass its
         # own self-check, and the leaf/two-space format must match exactly.
         expected = hashlib.sha256((output_dir / zip_name).read_bytes()).hexdigest()
-        assert sidecar.read_text(encoding="ascii").strip() == f"{expected}  {zip_name}"
+        assert sidecar.read_text(encoding="ascii").strip() == f"\{expected}  \{zip_name}"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("win"), reason=_STRICT_MODE_STRING_PATHS_REASON)
@@ -1461,13 +1461,13 @@ def test_build_ps1_archive_loop_rejects_contaminated_path_array():
             "$ErrorActionPreference = 'Stop';"
             "$contaminated = @('C:\\out\\a.zip', 'C:\\out\\a.zip');"
             "$rejected = $false;"
-            "foreach ($path in @($contaminated, 'C:\\out\\b.zip')) {"
-            "  try {"
+            "foreach ($path in @($contaminated, 'C:\\out\\b.zip')) \{"
+            "  try \{"
             "    if ($path -isnot [string]) "
-            "      { throw \"archive path is not a scalar string: $path\" }"
-            "  } catch { $rejected = $true }"
+            "      \{ throw \"archive path is not a scalar string: $path\" }"
+            "  } catch \{ $rejected = $true }"
             "};"
-            "if (-not $rejected) { throw 'contaminated array was accepted' };"
+            "if (-not $rejected) \{ throw 'contaminated array was accepted' };"
             "Write-Output 'contamination guard ok'",
         ],
         capture_output=True,
@@ -1492,7 +1492,7 @@ def _write_stub_module(site_packages: Path, module: str, body: str) -> None:
     package = site_packages / "cc_remote"
     package.mkdir(parents=True, exist_ok=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / f"{module}.py").write_text(body, encoding="utf-8")
+    (package / f"\{module}.py").write_text(body, encoding="utf-8")
 
 
 def _count_venv_python_processes(venv_python: Path) -> int:
@@ -1500,7 +1500,7 @@ def _count_venv_python_processes(venv_python: Path) -> int:
         [
             "powershell", "-NoProfile", "-Command",
             "@(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-            f"Where-Object {{ $_.CommandLine -like '*{venv_python}*' }}).Count",
+            f"Where-Object \{\{ $_.CommandLine -like '*\{venv_python}*' }}).Count",
         ],
         capture_output=True,
         text=True,
@@ -1517,8 +1517,8 @@ def _terminate_venv_python_processes(venv_python: Path) -> None:
         [
             "powershell", "-NoProfile", "-Command",
             "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-            f"Where-Object {{ $_.CommandLine -like '*{venv_python}*' }} | "
-            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            f"Where-Object \{\{ $_.CommandLine -like '*\{venv_python}*' }} | "
+            "ForEach-Object \{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
         ],
         capture_output=True,
         text=True,
@@ -1555,15 +1555,15 @@ def test_start_ps1_service_both_launches_concurrently_and_cleans_up(tmp_path: Pa
     _write_stub_module(
         site_packages,
         "relay",
-        f"import time\nopen({str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(10)\n",
+        f"import time\nopen(\{str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(10)\n",
     )
     _write_stub_module(
         site_packages,
         "wrapper",
-        f"import time\nopen({str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(10)\n",
+        f"import time\nopen(\{str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(10)\n",
     )
 
-    start_ps1 = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "start.ps1"
+    start_ps1 = Path(__file__).resolve().parents[1] / "cc_portable_control" / "windows" / "start.ps1"
     cmd = [
         "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", str(start_ps1), "-Service", "both", "-InstallRoot", str(install_root),
@@ -1588,9 +1588,9 @@ def test_start_ps1_service_both_launches_concurrently_and_cleans_up(tmp_path: Pa
 
     assert both_seen_while_alive, (
         "relay and wrapper were not both running at the same time; "
-        f"stdout={stdout!r} stderr={stderr!r}"
+        f"stdout=\{stdout!r} stderr=\{stderr!r}"
     )
-    assert proc.returncode == 0, f"stdout={stdout!r} stderr={stderr!r}"
+    assert proc.returncode == 0, f"stdout=\{stdout!r} stderr=\{stderr!r}"
     assert _count_venv_python_processes(venv_python) == 0, "orphan python process left behind"
     _terminate_venv_python_processes(venv_python)
 
@@ -1621,23 +1621,23 @@ def test_start_ps1_service_both_propagates_failure_and_stops_the_other(tmp_path:
     _write_stub_module(
         site_packages,
         "relay",
-        f"import time, sys\nopen({str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(1)\nsys.exit(7)\n",
+        f"import time, sys\nopen(\{str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(1)\nsys.exit(7)\n",
     )
     # The wrapper would run for 30s if it were not stopped by start.ps1.
     _write_stub_module(
         site_packages,
         "wrapper",
-        f"import time\nopen({str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(30)\n",
+        f"import time\nopen(\{str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(30)\n",
     )
 
-    start_ps1 = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "start.ps1"
+    start_ps1 = Path(__file__).resolve().parents[1] / "cc_portable_control" / "windows" / "start.ps1"
     cmd = [
         "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", str(start_ps1), "-Service", "both", "-InstallRoot", str(install_root),
     ]
     # Run from a directory that carries no cc_remote package so the stubs win.
     proc = subprocess.run(cmd, cwd=str(install_root), capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 7, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert proc.returncode == 7, f"stdout=\{proc.stdout!r} stderr=\{proc.stderr!r}"
     assert wrapper_marker.exists(), "wrapper never launched before the relay failed"
     # The wrapper's 30s sleep must have been interrupted; nothing may linger.
     assert _count_venv_python_processes(venv_python) == 0, "orphan wrapper python left behind"

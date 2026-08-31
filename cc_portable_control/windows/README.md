@@ -27,7 +27,7 @@ zero token cost to the end user.
 
 ```powershell
 # From a checked-out source tree (web/dist must already be built):
-.\packaging\windows\build.ps1 -SourceRoot <repo> -UvExe <path\to\uv.exe>
+.\cc_portable_control\windows\build.ps1 -SourceRoot <repo> -UvExe <path\to\uv.exe>
 # Produces dist\cc-remote-v<distribution-version>-windows-x64.zip + .sha256
 ```
 
@@ -82,17 +82,17 @@ tasks, no firewall); `start.ps1` then runs the processes in the foreground.
   logs\relay.log, wrapper.log  # supervised-process logs
 ```
 
-## Why a repo-local `packaging` package
+## Why a repo-local `cc_portable_control` package
 
-The build/install toolchain lives at the repo root under `packaging/windows/`.
+The build/install toolchain lives at the repo root under `cc_portable_control/windows/`.
 That directory name collides with the PyPI `packaging` distribution that the
-backend's dependencies pull into the venv. To keep `import packaging.windows`
+backend's dependencies pull into the venv. To keep `import cc_portable_control.windows`
 resolving (a regular package wins over a namespace package at the same
-`sys.path` position), the archive embeds `packaging/__init__.py` so the
-extracted `packaging` is a *regular* package.
+`sys.path` position), the archive embeds `cc_portable_control/__init__.py` so
+the extracted `cc_portable_control` is a *regular* package.
 
 Consequence: in any process whose `sys.path[0]` is the release tree, the
-repo-local `packaging` shadows the PyPI distribution. This is contained:
+repo-local `cc_portable_control` package is used from the release tree. This is contained:
 
 - The **app processes** (relay/wrapper) never have the release tree on
   `sys.path`. `install.ps1` wires a venv site-packages `.pth` that adds only
@@ -101,10 +101,11 @@ repo-local `packaging` shadows the PyPI distribution. This is contained:
   never shadowed.
 - The **installer script processes** (`win_manifest.py --copy`, `win_smoke.py
   --check`, ...) do insert the release root at `sys.path[0]`, but they only
-  import `packaging.windows.*` and never the PyPI distribution.
+  import `cc_portable_control.windows.*` and never the PyPI distribution.
 
 If the toolchain ever needs PyPI `packaging` in the same process as
-`packaging.windows`, rename the repo-local package rather than importing both.
+`cc_portable_control.windows`, rename the repo-local package rather than importing
+both.
 
 ## Security posture
 
@@ -126,5 +127,5 @@ The Python modules are pure and zero-token. From the repo root:
 ```powershell
 $env:PYTHONUTF8 = "1"          # avoids GBK console issues on Windows
 python -m pytest tests/test_windows_packaging.py -q
-python packaging\windows\win_smoke.py --check <staged-payload>
+python cc_portable_control\windows\win_smoke.py --check <staged-payload>
 ```

@@ -22,7 +22,7 @@ import json
 import shutil
 import tempfile
 
-from packaging.windows.win_config import (
+from cc_portable_control.windows.win_config import (
     FirstRunAnswers,
     build_env_content,
     generate_secret,
@@ -30,8 +30,8 @@ from packaging.windows.win_config import (
     validate_answers,
     validate_preserved_config,
 )
-from packaging.windows.win_layout import InstallLayout
-from packaging.windows.win_manifest import (
+from cc_portable_control.windows.win_layout import InstallLayout
+from cc_portable_control.windows.win_manifest import (
     DistributionInfo,
     assert_no_venv,
     find_forbidden_entries,

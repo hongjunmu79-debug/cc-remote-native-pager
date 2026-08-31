@@ -10,10 +10,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# When this module is invoked as a script (``python packaging/windows/
-# win_manifest.py``) sys.path[0] is the ``packaging/windows`` directory, so the
-# repository root is not importable. Insert it so ``packaging.windows``
-# resolves whether we run from the source tree or from a release archive.
+# When this module is invoked as a script (``python cc_portable_control/windows/
+# win_manifest.py``) sys.path[0] is the
+# ``cc_portable_control/windows`` directory, so the repository root is not
+# importable. Insert it so ``cc_portable_control.windows`` resolves whether we run
+# from the source tree or from a release archive.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -22,7 +23,7 @@ import json
 import shutil
 from dataclasses import dataclass
 
-from packaging.windows.win_layout import sha256_of, write_sha256sums
+from cc_portable_control.windows.win_layout import sha256_of, write_sha256sums
 
 DISTRIBUTION_MANIFEST_NAME = "distribution-manifest.json"
 _SHA256SUMS_NAME = "SHA256SUMS"
@@ -155,7 +156,7 @@ def find_forbidden_entries(tree: Path) -> list[str]:
     """Return dev-leftover problems anywhere under [tree] (empty = OK).
 
     Scans an extracted release tree as a whole — including the archive root's
-    ``packaging/`` layer, not just the ``payload/`` subtree that
+    ``cc_portable_control/`` layer, not just the ``payload/`` subtree that
     ``verify_distribution`` covers. The rule sets are the same single source
     the manifest walker and the clean-copy helper use, so a cleaned payload and
     a cleaned packaging tree can never disagree about what is forbidden.

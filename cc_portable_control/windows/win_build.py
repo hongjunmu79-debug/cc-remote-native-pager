@@ -7,8 +7,9 @@ Two distinct deliverables are produced from one verified payload:
   runtime venv on first use (bundled ``uv.exe`` + ``requirements.lock``). It
   never registers scheduled tasks, a firewall rule, or registry values.
 * **Installer archive** (``...-windows-x64-installer.zip``): the classic
-  ``setup.ps1`` + ``packaging/windows`` + ``payload`` archive that the Inno
-  Setup installer (``...-windows-x64-setup.exe``) embeds and invokes.
+  ``setup.ps1`` + ``cc_portable_control/windows`` + ``payload`` archive that
+  the Inno Setup installer (``...-windows-x64-setup.exe``) embeds and
+  invokes.
 
 Determinism here means: the same inputs (bytes of every file) and the same
 SOURCE_DATE_EPOCH produce byte-identical archives, so a downstream checksum is
@@ -32,7 +33,7 @@ import os
 import zipfile
 from dataclasses import dataclass
 
-from packaging.windows.win_manifest import DistributionInfo, build_manifest, write_manifest
+from cc_portable_control.windows.win_manifest import DistributionInfo, build_manifest, write_manifest
 
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 
@@ -110,11 +111,12 @@ def build_release_archive(
     """Zip a staged release into the deterministic installer archive.
 
     The archive root carries ``setup.ps1`` (the installer entry point); under
-    it live ``packaging/windows`` (runtime scripts and PowerShell files) and
-    the verified ``payload`` tree. ``packaging_init`` is the
-    ``packaging/__init__.py`` of the source tree, embedded as
-    ``packaging/__init__.py`` so the extracted ``packaging`` is a regular
-    package (never shadowed by the installed ``packaging`` distribution).
+    it live ``cc_portable_control/windows`` (runtime scripts and PowerShell files)
+    and the verified ``payload`` tree. ``packaging_init`` is the
+    ``cc_portable_control/__init__.py`` of the source tree, embedded as
+    ``cc_portable_control/__init__.py`` so the extracted
+    ``cc_portable_control`` is a regular package (not shadowed by the installed
+    ``packaging`` distribution).
     """
     setup_ps1 = setup_ps1.resolve()
     packaging_dir = packaging_dir.resolve()
@@ -122,7 +124,7 @@ def build_release_archive(
     if not setup_ps1.is_file():
         raise BuildError(f"setup.ps1 is missing: {setup_ps1}")
     if not packaging_dir.is_dir():
-        raise BuildError(f"packaging directory is missing: {packaging_dir}")
+        raise BuildError(f"cc_portable_control directory is missing: {packaging_dir}")
 
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,12 +135,12 @@ def build_release_archive(
             ("setup.ps1", setup_ps1, 0o755),
         ]
         if packaging_init is not None:
-            root_entries.append(("packaging/__init__.py", packaging_init, 0o644))
+            root_entries.append(("cc_portable_control/__init__.py", packaging_init, 0o644))
         file_count = _write_zip(
             temporary,
             root_entries,
             [
-                (packaging_dir, "packaging/windows", 0o755),
+                (packaging_dir, "cc_portable_control/windows", 0o755),
                 (payload, "payload", 0o644),
             ],
         )
@@ -174,8 +176,9 @@ def build_portable_archive(
 
     The archive root carries ``start-portable.ps1`` (run from the extracted
     root; it creates a local runtime venv on first use and never mutates
-    scheduled tasks/firewall/registry) plus the same ``packaging/windows`` and
-    verified ``payload`` trees as the installer archive, without ``setup.ps1``.
+    scheduled tasks/firewall/registry) plus the same
+    ``cc_portable_control/windows`` and verified ``payload`` trees as the
+    installer archive, without ``setup.ps1``.
     """
     start_portable = start_portable.resolve()
     packaging_dir = packaging_dir.resolve()
@@ -183,7 +186,7 @@ def build_portable_archive(
     if not start_portable.is_file():
         raise BuildError(f"start-portable.ps1 is missing: {start_portable}")
     if not packaging_dir.is_dir():
-        raise BuildError(f"packaging directory is missing: {packaging_dir}")
+        raise BuildError(f"cc_portable_control directory is missing: {packaging_dir}")
 
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,12 +202,12 @@ def build_portable_archive(
                 raise BuildError(f"portable README is missing: {readme}")
             root_entries.append(("README-portable.txt", readme, 0o644))
         if packaging_init is not None:
-            root_entries.append(("packaging/__init__.py", packaging_init, 0o644))
+            root_entries.append(("cc_portable_control/__init__.py", packaging_init, 0o644))
         file_count = _write_zip(
             temporary,
             root_entries,
             [
-                (packaging_dir, "packaging/windows", 0o755),
+                (packaging_dir, "cc_portable_control/windows", 0o755),
                 (payload, "payload", 0o644),
             ],
         )
@@ -233,8 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--setup", type=Path, default=None, help="setup.ps1 to embed at the archive root (installer archive)")
     parser.add_argument("--start-portable", type=Path, default=None, help="start-portable.ps1 to embed at the archive root (portable archive)")
     parser.add_argument("--readme", type=Path, default=None, help="README-portable.txt to embed at the archive root (portable archive)")
-    parser.add_argument("--packaging", type=Path, required=True, help="packaging/windows directory (scripts)")
-    parser.add_argument("--packaging-init", type=Path, default=None, help="packaging/__init__.py of the source tree")
+    parser.add_argument("--packaging", type=Path, required=True, help="cc_portable_control/windows directory (scripts)")
+    parser.add_argument("--packaging-init", type=Path, default=None, help="cc_portable_control/__init__.py of the source tree")
     parser.add_argument("--payload", type=Path, required=True, help="built payload tree")
     parser.add_argument("--output", type=Path, required=True, help="output zip path")
     parser.add_argument("--portable", action="store_true", help="assemble the portable archive instead of the installer archive")

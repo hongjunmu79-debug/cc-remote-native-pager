@@ -242,7 +242,7 @@ jobs:
           retention-days: 7
 
   # Source-built Windows distribution: web/dist is built from this checkout,
-  # the archive is assembled by packaging\windows\build.ps1 (deterministic zip,
+  # the archive is assembled by cc_portable_control\windows\build.ps1 (deterministic zip,
   # payload manifest, smoke suite, SHA-256), and both the archive and its
   # checksum are uploaded. No node LAN proxy, no shipped .venv.
   build-windows:
@@ -286,7 +286,7 @@ jobs:
           if (-not $uvExe) { throw "uv not found on PATH" }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           powershell -NoProfile -ExecutionPolicy Bypass -File `
-            packaging\windows\build.ps1 `
+            cc_portable_control\windows\build.ps1 `
             -SourceRoot . -OutputDir dist -UvExe $uvExe `
             -GitSha $env:GIT_SHA -SourceDateEpoch $epoch
       - name: Verify all three artifacts and smoke-check the archives
@@ -307,9 +307,9 @@ jobs:
             } else {
               if (-not (Test-Path (Join-Path $dest "setup.ps1"))) { throw "installer zip is missing setup.ps1" }
             }
-            python packaging\windows\win_smoke.py --check (Join-Path $dest "payload")
+            python cc_portable_control\windows\win_smoke.py --check (Join-Path $dest "payload")
             if ($LASTEXITCODE -ne 0) { throw "clean-install smoke failed for $($zip.Name)" }
-            python packaging\windows\win_smoke.py --check-tree $dest
+            python cc_portable_control\windows\win_smoke.py --check-tree $dest
             if ($LASTEXITCODE -ne 0) { throw "forbidden entries in extracted $($zip.Name)" }
             Write-Host "Verified $($zip.Name) (smoke + tree check passed)"
           }

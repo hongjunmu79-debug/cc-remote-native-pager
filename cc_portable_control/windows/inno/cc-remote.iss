@@ -2,7 +2,7 @@
 ;
 ; Compiled by build-installer.ps1 (ISCC.exe) with these defines:
 ;   /DStageDir=<abs path to the staged release root>   (contains setup.ps1,
-;                                                       packaging/, payload/)
+;                                                       cc_portable_control/, payload/)
 ;   /DDistVersion=<canonical distribution_version>      from release-metadata.json
 ;   /DProductVersion=<canonical product_version>        from release-metadata.json
 ;   /DOutputDir=<abs path for the produced .exe>
@@ -63,18 +63,19 @@ WizardStyle=modern
 
 [Files]
 ; The release bundle keeps the archive layout: setup.ps1 at the root, the
-; packaging/windows scripts, and the verified payload tree. The Inno-managed
+; cc_portable_control/windows scripts, and the verified payload tree. The
+; Inno-managed
 ; copy lives at {app}\release and is what setup.ps1 runs from.
 Source: "{#StageDir}\setup.ps1"; DestDir: "{app}\release"; Flags: ignoreversion
-Source: "{#StageDir}\packaging\*"; DestDir: "{app}\release\packaging"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDir}\cc_portable_control\*"; DestDir: "{app}\release\cc_portable_control"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\payload\*"; DestDir: "{app}\release\payload"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Run]
 ; setup.ps1 performs the real install into {app} (the user-chosen install
 ; root). The wizard waits for it to finish so failures surface to the user.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""setup.ps1"" {#SetupArgs}"; WorkingDir: "{app}\release"; Flags: waituntilterminated; StatusMsg: "Installing cc-remote (this may take a minute)..."
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\packaging\windows\open-console.ps1"" -InstallRoot ""{app}"""; Description: "Open cc-remote console"; Flags: postinstall nowait skipifsilent
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; Description: "Open cc-remote console"; Flags: postinstall nowait skipifsilent
 
 [Icons]
-Name: "{group}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\packaging\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
-Name: "{autodesktop}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\packaging\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
+Name: "{group}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
+Name: "{autodesktop}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
