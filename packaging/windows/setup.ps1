@@ -50,14 +50,11 @@ if (-not (Test-Path (Join-Path $payload "distribution-manifest.json"))) {
 
 $manifest = Get-Content (Join-Path $payload "distribution-manifest.json") -Raw | ConvertFrom-Json
 if (-not $InstallRoot) {
-    # Derive install root from where setup.ps1 was extracted. This avoids relying on
-    # CLI binding of a non-ASCII path that can be fragile in launchers.
-    $inferredInstallRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd('\')
-    $probe = Join-Path $inferredInstallRoot "packaging\windows\install.ps1"
-    if (-not (Test-Path $probe)) {
-        throw "install.ps1 was not found at expected inferred install-root location: $inferredInstallRoot"
-    }
-    $InstallRoot = $inferredInstallRoot
+    # Derive install root from where setup.ps1 was extracted. setup.ps1 lives in
+    # {installRoot}\release, so the install root is its parent. The installer
+    # (packaging\windows\install.ps1) is located relative to $scriptRoot and is
+    # already validated above via Test-Path $installer.
+    $InstallRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd('\\')
     Write-Host "[cc-remote] InstallRoot not provided; inferring $InstallRoot from setup.ps1 location" -ForegroundColor Yellow
 }
 
@@ -66,20 +63,18 @@ if (-not $InstallRoot) { throw "failed to determine install root" }
 Write-Host "[cc-remote] cc-remote v$($manifest.product_version) (protocol v$($manifest.protocol)) distribution $($manifest.distribution_version)" -ForegroundColor Cyan
 Write-Host "[cc-remote] git $($manifest.git_sha.Substring(0, 12))" -ForegroundColor Cyan
 
-$installArgs = @(
-    "-Payload", $payload
-)
-if ($InstallRoot) { $installArgs += "-InstallRoot"; $installArgs += $InstallRoot }
-if ($Unattended) { $installArgs += "-Unattended" }
-if ($LoginPassword) { $installArgs += "-LoginPassword"; $installArgs += $LoginPassword }
-if ($MachineName) { $installArgs += "-MachineName"; $installArgs += $MachineName }
-if ($Workspace) { $installArgs += "-Workspace"; $installArgs += $Workspace }
-if ($PublicOrigin) { $installArgs += "-PublicOrigin"; $installArgs += $PublicOrigin }
-if ($RelayPort -ne 8765) { $installArgs += "-RelayPort"; $installArgs += "$RelayPort" }
-if ($AllowInsecureHttp) { $installArgs += "-AllowInsecureHttp" }
-if ($ConfigFile) { $installArgs += "-ConfigFile"; $installArgs += $ConfigFile }
-if ($NoServices) { $installArgs += "-NoServices" }
-if ($NoFirewall) { $installArgs += "-NoFirewall" }
+$callArgs = @{ Payload = $payload }
+if ($InstallRoot) { $callArgs['InstallRoot'] = $InstallRoot }
+if ($Unattended) { $callArgs['Unattended'] = $true }
+if ($LoginPassword) { $callArgs['LoginPassword'] = $LoginPassword }
+if ($MachineName) { $callArgs['MachineName'] = $MachineName }
+if ($Workspace) { $callArgs['Workspace'] = $Workspace }
+if ($PublicOrigin) { $callArgs['PublicOrigin'] = $PublicOrigin }
+if ($RelayPort -ne 8765) { $callArgs['RelayPort'] = $RelayPort }
+if ($AllowInsecureHttp) { $callArgs['AllowInsecureHttp'] = $true }
+if ($ConfigFile) { $callArgs['ConfigFile'] = $ConfigFile }
+if ($NoServices) { $callArgs['NoServices'] = $true }
+if ($NoFirewall) { $callArgs['NoFirewall'] = $true }
 
-& $installer @installArgs
+& $installer @callArgs
 exit $LASTEXITCODE
