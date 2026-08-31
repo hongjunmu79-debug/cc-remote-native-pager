@@ -52,6 +52,17 @@ def _expect(condition: bool, message: str) -> None:
         raise SmokeFailure(message)
 
 
+def _normalize_path_text(text: str) -> str:
+    return text.replace("\\", "/").rstrip("/").lower()
+
+
+def _path_is_within(path: Path, marker: str) -> bool:
+    """True when [path] is AT or UNDER [marker] (segment-wise, separator/case blind)."""
+    base = _normalize_path_text(marker)
+    target = _normalize_path_text(str(path))
+    return bool(base) and (target == base or target.startswith(base + "/"))
+
+
 def load_distribution_info(dist_root: Path) -> DistributionInfo:
     manifest = read_manifest(dist_root)
     return DistributionInfo(
@@ -146,8 +157,14 @@ def run_clean_install_smoke(dist_root: Path, temp_root: Path) -> list[str]:
         f"{key}={value}" for key, value in parsed.items()
     ).replace("\\", "/").lower()
     for marker in FORBIDDEN_DEV_PATH_MARKERS:
-        if marker.replace("\\", "/").lower() in rendered_text:
-            problems.append(f"config leaks a dev-machine path marker: {marker}")
+        if marker.replace("\\", "/").lower() not in rendered_text:
+            continue
+        # Exempt only this run's own scratch tree: a match is noise when temp_root
+        # is AT or UNDER the marker (mkdtemp landing in a dev home); a marker that
+        # is not an ancestor of temp_root is a real leak and still fails.
+        if _path_is_within(temp_root, marker):
+            continue
+        problems.append(f"config leaks a dev-machine path marker: {marker}")
     if FORBIDDEN_OLD_LAN_IP in rendered_text:
         problems.append("config still references the old machine-specific LAN IP")
 
