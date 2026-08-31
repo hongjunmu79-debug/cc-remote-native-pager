@@ -233,7 +233,7 @@ def test_validate_public_origin():
 def test_dotenv_value_round_trips_windows_paths():
     value = r"C:\Users\alice\projects\my folder"
     quoted = win_config._dotenv_value(value)
-    parsed = win_config.parse_env_file(f"KEY=\{quoted}\n")
+    parsed = win_config.parse_env_file(f"KEY={quoted}\n")
     assert parsed["KEY"] == value
     assert win_config._dotenv_value("simple") == "simple"
 
@@ -409,7 +409,7 @@ def test_sha256_and_sha256sums(tmp_path: Path):
     digest = win_layout.sha256_of(path)
     assert digest == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     sums = win_layout.write_sha256sums(tmp_path, [path], relroot=tmp_path)
-    assert sums.read_text(encoding="utf-8").strip() == f"\{digest}  a.txt"
+    assert sums.read_text(encoding="utf-8").strip() == f"{digest}  a.txt"
 
 
 def test_is_absolute_windows_path_and_layout_leaf(tmp_path: Path):
@@ -787,9 +787,9 @@ def _stage_and_build_archive(tmp_path: Path, epoch: int, name: str = "cc-remote-
     # previous call's distribution-manifest.json/SHA256SUMS — the same
     # guarantee build.ps1 gives by removing its staging root between runs.
     stem = Path(name).stem
-    source = tmp_path / f"source-\{stem}"
+    source = tmp_path / f"source-{stem}"
     make_source_tree(source)
-    payload = tmp_path / f"payload-\{stem}"
+    payload = tmp_path / f"payload-{stem}"
     win_manifest.stage_payload(source, payload)
     build_fake_distribution(payload)
     packaging = tmp_path / "cc_portable_control"
@@ -991,9 +991,9 @@ def _stage_and_build_portable_archive(
     name: str = "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip",
 ) -> tuple[Path, win_build.ReleaseArchive]:
     stem = Path(name).stem
-    source = tmp_path / f"source-\{stem}"
+    source = tmp_path / f"source-{stem}"
     make_source_tree(source)
-    payload = tmp_path / f"payload-\{stem}"
+    payload = tmp_path / f"payload-{stem}"
     win_manifest.stage_payload(source, payload)
     build_fake_distribution(payload)
     packaging = tmp_path / "cc_portable_control"
@@ -1172,7 +1172,7 @@ def test_uninstall_rollback_is_transactional():
         for index, line in enumerate(lines):
             if sub in line:
                 return index
-        raise AssertionError(f"missing \{sub!r} in uninstall.ps1")
+        raise AssertionError(f"missing {sub!r} in uninstall.ps1")
 
     assert find("pip install") < find("-Target $prevDir")
     assert find("register-tasks.ps1") < find("Test-SupervisedHealth")
@@ -1429,7 +1429,7 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
         text=True,
         timeout=180,
     )
-    assert proc.returncode == 0, f"stdout=\{proc.stdout!r} stderr=\{proc.stderr!r}"
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert "archive-loop ok" in proc.stdout
     zips = sorted(p.name for p in output_dir.glob("*.zip"))
     assert zips == [
@@ -1437,13 +1437,13 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
         "cc-remote-v3.0.0-pager.5-windows-x64.zip",
     ]
     for zip_name in zips:
-        sidecar = output_dir / f"\{zip_name}.sha256"
+        sidecar = output_dir / f"{zip_name}.sha256"
         assert sidecar.is_file()
         # Exact sidecar contract, verified from Python's independent SHA-256
         # oracle: a consistently-wrong hash helper in the probe cannot pass its
         # own self-check, and the leaf/two-space format must match exactly.
         expected = hashlib.sha256((output_dir / zip_name).read_bytes()).hexdigest()
-        assert sidecar.read_text(encoding="ascii").strip() == f"\{expected}  \{zip_name}"
+        assert sidecar.read_text(encoding="ascii").strip() == f"{expected}  {zip_name}"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("win"), reason=_STRICT_MODE_STRING_PATHS_REASON)
@@ -1492,7 +1492,7 @@ def _write_stub_module(site_packages: Path, module: str, body: str) -> None:
     package = site_packages / "cc_remote"
     package.mkdir(parents=True, exist_ok=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / f"\{module}.py").write_text(body, encoding="utf-8")
+    (package / f"{module}.py").write_text(body, encoding="utf-8")
 
 
 def _count_venv_python_processes(venv_python: Path) -> int:
@@ -1556,12 +1556,12 @@ def test_start_ps1_service_both_launches_concurrently_and_cleans_up(tmp_path: Pa
     _write_stub_module(
         site_packages,
         "relay",
-        f"import time\nopen(\{str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(10)\n",
+        f"import time\nopen({str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(10)\n",
     )
     _write_stub_module(
         site_packages,
         "wrapper",
-        f"import time\nopen(\{str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(10)\n",
+        f"import time\nopen({str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(10)\n",
     )
 
     start_ps1 = Path(__file__).resolve().parents[1] / "cc_portable_control" / "windows" / "start.ps1"
@@ -1589,9 +1589,9 @@ def test_start_ps1_service_both_launches_concurrently_and_cleans_up(tmp_path: Pa
 
     assert both_seen_while_alive, (
         "relay and wrapper were not both running at the same time; "
-        f"stdout=\{stdout!r} stderr=\{stderr!r}"
+        f"stdout={stdout!r} stderr={stderr!r}"
     )
-    assert proc.returncode == 0, f"stdout=\{stdout!r} stderr=\{stderr!r}"
+    assert proc.returncode == 0, f"stdout={stdout!r} stderr={stderr!r}"
     assert _count_venv_python_processes(venv_python) == 0, "orphan python process left behind"
     _terminate_venv_python_processes(venv_python)
 
@@ -1622,13 +1622,13 @@ def test_start_ps1_service_both_propagates_failure_and_stops_the_other(tmp_path:
     _write_stub_module(
         site_packages,
         "relay",
-        f"import time, sys\nopen(\{str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(1)\nsys.exit(7)\n",
+        f"import time, sys\nopen({str(relay_marker)!r}, 'w').write('relay')\ntime.sleep(1)\nsys.exit(7)\n",
     )
     # The wrapper would run for 30s if it were not stopped by start.ps1.
     _write_stub_module(
         site_packages,
         "wrapper",
-        f"import time\nopen(\{str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(30)\n",
+        f"import time\nopen({str(wrapper_marker)!r}, 'w').write('wrapper')\ntime.sleep(30)\n",
     )
 
     start_ps1 = Path(__file__).resolve().parents[1] / "cc_portable_control" / "windows" / "start.ps1"
@@ -1638,7 +1638,7 @@ def test_start_ps1_service_both_propagates_failure_and_stops_the_other(tmp_path:
     ]
     # Run from a directory that carries no cc_remote package so the stubs win.
     proc = subprocess.run(cmd, cwd=str(install_root), capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 7, f"stdout=\{proc.stdout!r} stderr=\{proc.stderr!r}"
+    assert proc.returncode == 7, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert wrapper_marker.exists(), "wrapper never launched before the relay failed"
     # The wrapper's 30s sleep must have been interrupted; nothing may linger.
     assert _count_venv_python_processes(venv_python) == 0, "orphan wrapper python left behind"
