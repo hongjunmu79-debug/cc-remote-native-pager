@@ -17,13 +17,13 @@ import pytest
 
 from cc_portable_control.windows import win_build, win_config, win_layout, win_manifest, win_smoke
 
-METADATA = \{
+METADATA = {
     "schema": 1,
     "product_version": "3.0.0",
     "distribution_version": "3.0.0-pager.5",
     "protocol": 19,
-    "repository": \{"owner": "hongjunmu79-debug", "name": "cc-remote-native-pager"},
-    "android": \{"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.5", "version_code": 30014},
+    "repository": {"owner": "hongjunmu79-debug", "name": "cc-remote-native-pager"},
+    "android": {"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.5", "version_code": 30014},
 }
 
 
@@ -1500,7 +1500,7 @@ def _count_venv_python_processes(venv_python: Path) -> int:
         [
             "powershell", "-NoProfile", "-Command",
             "@(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-            f"Where-Object \{\{ $_.CommandLine -like '*\{venv_python}*' }}).Count",
+            "Where-Object { $_.CommandLine -like '*<VENV_PY>*' }).Count".replace("<VENV_PY>", str(venv_python)),
         ],
         capture_output=True,
         text=True,
@@ -1517,8 +1517,9 @@ def _terminate_venv_python_processes(venv_python: Path) -> None:
         [
             "powershell", "-NoProfile", "-Command",
             "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-            f"Where-Object \{\{ $_.CommandLine -like '*\{venv_python}*' }} | "
-            "ForEach-Object \{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            "Where-Object { $_.CommandLine -like '*<VENV_PY>*' } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }".replace(
+                "<VENV_PY>", str(venv_python)),
         ],
         capture_output=True,
         text=True,
