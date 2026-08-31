@@ -49,6 +49,20 @@ if (-not (Test-Path (Join-Path $payload "distribution-manifest.json"))) {
 }
 
 $manifest = Get-Content (Join-Path $payload "distribution-manifest.json") -Raw | ConvertFrom-Json
+if (-not $InstallRoot) {
+    # Derive install root from where setup.ps1 was extracted. This avoids relying on
+    # CLI binding of a non-ASCII path that can be fragile in launchers.
+    $inferredInstallRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd('\')
+    $probe = Join-Path $inferredInstallRoot "packaging\windows\install.ps1"
+    if (-not (Test-Path $probe)) {
+        throw "install.ps1 was not found at expected inferred install-root location: $inferredInstallRoot"
+    }
+    $InstallRoot = $inferredInstallRoot
+    Write-Host "[cc-remote] InstallRoot not provided; inferring $InstallRoot from setup.ps1 location" -ForegroundColor Yellow
+}
+
+if (-not $InstallRoot) { throw "failed to determine install root" }
+
 Write-Host "[cc-remote] cc-remote v$($manifest.product_version) (protocol v$($manifest.protocol)) distribution $($manifest.distribution_version)" -ForegroundColor Cyan
 Write-Host "[cc-remote] git $($manifest.git_sha.Substring(0, 12))" -ForegroundColor Cyan
 
