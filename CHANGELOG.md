@@ -2,7 +2,10 @@
 
 [中文](CHANGELOG_zh.md)
 
-## v3.0.0-pager.7 — 2026-09-03
+## v3.0.0-pager.8 — 2026-09-03
+
+- Make the Windows release builder install its pinned managed Python before
+  resolving the interpreter path, including on fresh GitHub Windows runners.
 
 Zero-configuration LAN onboarding on product v3.0.0 / wire protocol v19. No
 session, engine, routing, or wire-protocol behavior changed.
@@ -26,8 +29,8 @@ session, engine, routing, or wire-protocol behavior changed.
 - Windows artifacts carry a deterministic, ready-to-run Python/dependency
   bundle. First install performs no Python or package download, and the nested
   runtime archive avoids thousands of slow Inno Setup file operations.
-- Bump the Android distribution to version name `3.0.0-pager.7` / version code
-  `30016`, with matching two-download setup documentation.
+- Bump the Android distribution to version name `3.0.0-pager.8` / version code
+  `30017`, with matching two-download setup documentation.
 
 ## v3.0.0-pager.5 — 2026-08-27
 
