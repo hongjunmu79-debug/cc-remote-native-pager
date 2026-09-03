@@ -15,6 +15,7 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -66,6 +67,63 @@ SESSION_REVOKED_CLOSE_REASON = "session revoked"
 _PUSH_BODY_MAX_BYTES = 16 * 1024
 _DEVICE_BODY_MAX_BYTES = 8 * 1024
 _PUSH_KEY_RE = re.compile(r"[A-Za-z0-9_-]{16,1024}")
+
+
+def _lan_ipv4_addresses() -> tuple[str, ...]:
+    """Return likely physical LAN IPv4 addresses, excluding tunnel space."""
+    addresses: set[str] = set()
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        infos = ()
+    for _family, _kind, _proto, _canonname, sockaddr in infos:
+        host = str(sockaddr[0])
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        if (not isinstance(ip, ipaddress.IPv4Address) or ip.is_loopback
+                or ip.is_link_local or not ip.is_private
+                or ip in ipaddress.ip_network("198.18.0.0/15")):
+            continue
+        addresses.add(host)
+
+    def rank(host: str) -> tuple[int, str]:
+        ip = ipaddress.ip_address(host)
+        if ip in ipaddress.ip_network("192.168.0.0/16"):
+            return (0, host)
+        if ip in ipaddress.ip_network("10.0.0.0/8"):
+            return (1, host)
+        return (2, host)
+
+    return tuple(sorted(addresses, key=rank))
+
+
+def _advertised_origin(cfg: RelayConfig) -> str:
+    """Refresh the phone-facing origin for local/private HTTP deployments."""
+    configured = cfg.public_origin.rstrip("/")
+    try:
+        parsed = urlsplit(configured)
+        configured_ip = ipaddress.ip_address(parsed.hostname or "")
+    except (ValueError, TypeError):
+        return configured
+    if parsed.scheme not in {"http", "https"} or not configured_ip.is_private:
+        return configured
+    candidates = _lan_ipv4_addresses()
+    if not candidates:
+        return configured
+    netloc = candidates[0]
+    if parsed.port is not None:
+        netloc += f":{parsed.port}"
+    return f"{parsed.scheme}://{netloc}"
+
+
+def _origin_allowed(origin: str, cfg: RelayConfig) -> bool:
+    if not origin:
+        return True
+    return origin.rstrip("/") in {
+        cfg.public_origin.rstrip("/"), _advertised_origin(cfg).rstrip("/")
+    }
 
 
 class LoginRateLimiter:
@@ -227,7 +285,7 @@ def _rate_limited(ip: str) -> bool:
 def _request_origin_allowed(req: Request, cfg: RelayConfig) -> bool:
     """Reject browser cross-origin POSTs while retaining non-browser CLI use."""
     origin = req.headers.get("origin", "").strip()
-    return not origin or origin == cfg.public_origin
+    return _origin_allowed(origin, cfg)
 
 
 def _local_pairing_request(req: Request) -> bool:
@@ -663,7 +721,7 @@ def create_app(
         payload = json.dumps({
             "v": 1,
             "type": "cc_remote_client_pair",
-            "relay": cfg.public_origin.rstrip("/"),
+            "relay": _advertised_origin(cfg),
             "token": grant.token,
             "machine_id": grant.machine_id,
             "client_id": grant.client_id,
@@ -1062,8 +1120,7 @@ def create_app(
         if role is None:
             token = websocket.cookies.get(SESSION_COOKIE_NAME, "")
             origin = websocket.headers.get("origin", "")
-            expected_origin = cfg.public_origin.strip().rstrip("/")
-            origin_ok = not expected_origin or origin == expected_origin
+            origin_ok = _origin_allowed(origin, cfg)
             claims = session_token_claims(token, cfg.session_secret)
             if (
                 claims is not None

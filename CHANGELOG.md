@@ -2,6 +2,13 @@
 
 [中文](CHANGELOG_zh.md)
 
+## v3.0.0-pager.10 — 2026-09-04
+
+- QR pairing now advertises the current physical LAN IPv4 address, so DHCP
+  changes no longer leave Android clients pointed at a stale address.
+- Authenticated HTTP and WebSocket requests accept the configured origin and
+  the current local LAN origin.
+
 ## v3.0.0-pager.8 — 2026-09-03
 
 - Make the Windows release builder install its pinned managed Python before
