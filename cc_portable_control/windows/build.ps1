@@ -107,12 +107,9 @@ Write-Step "Bundled uv $uvVersionText as payload\bin\uv.exe"
 # Inno Setup child process is unreliable on Windows profiles backed by cloud
 # file-system filters (ERROR_UNTRUSTED_MOUNT_POINT / cross-volume rename).
 $pythonVersion = (Get-Content (Join-Path $sourceRoot "deploy\python-version.txt") | Select-Object -First 1).Trim()
-$managedPython = (& $uvExeFull python find --managed-python $pythonVersion 2>$null | Select-Object -First 1)
-if (-not $managedPython) {
-    & $uvExeFull python install $pythonVersion
-    if ($LASTEXITCODE -ne 0) { throw "uv could not install the pinned build-time Python $pythonVersion" }
-    $managedPython = (& $uvExeFull python find --managed-python $pythonVersion 2>$null | Select-Object -First 1)
-}
+& $uvExeFull python install $pythonVersion
+if ($LASTEXITCODE -ne 0) { throw "uv could not install the pinned build-time Python $pythonVersion" }
+$managedPython = (& $uvExeFull python find --managed-python $pythonVersion | Select-Object -First 1)
 if (-not $managedPython -or -not (Test-Path $managedPython)) {
     throw "uv could not locate the pinned build-time Python $pythonVersion"
 }

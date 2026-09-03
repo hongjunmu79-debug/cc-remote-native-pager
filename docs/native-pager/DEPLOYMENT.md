@@ -3,7 +3,7 @@
 ## Release inputs
 
 - Android application ID: `dev.ccremote.lan`
-- Distribution version: `3.0.0-pager.7` (version code `30016`)
+- Distribution version: `3.0.0-pager.8` (version code `30017`)
 - cc-remote product version: `3.0.0`
 - cc-remote protocol: `19`
 - Native bridge: `1`

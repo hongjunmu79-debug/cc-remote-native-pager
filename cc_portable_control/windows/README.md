@@ -44,8 +44,8 @@ byte-identical zip.
 # It includes pinned Python and dependencies; no system Python or package
 # download is required during first install.
 # Archive fallback (also zero-config):
-Expand-Archive cc-remote-v3.0.0-pager.7-windows-x64.zip
-cd cc-remote-v3.0.0-pager.7-windows-x64
+Expand-Archive cc-remote-v3.0.0-pager.8-windows-x64.zip
+cd cc-remote-v3.0.0-pager.8-windows-x64
 .\setup.ps1 -Unattended -AllowInsecureHttp
 ```
 

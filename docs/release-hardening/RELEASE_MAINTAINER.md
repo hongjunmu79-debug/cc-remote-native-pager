@@ -15,12 +15,12 @@ Everything that varies per release lives in one file:
 | Key | Current value | Meaning |
 | --- | --- | --- |
 | `product_version` | `3.0.0` | Base cc-remote backend/web codebase version. |
-| `distribution_version` | `3.0.0-pager.7` | Android-pager release line; what release tags and installers target. |
+| `distribution_version` | `3.0.0-pager.8` | Android-pager release line; what release tags and installers target. |
 | `protocol` | `19` | Wire protocol. Unchanged by the pager distribution. |
 | `repository.owner/name` | `hongjunmu79-debug/cc-remote-native-pager` | Public repository identity used by URLs and install scripts. |
 | `android.application_id` | `dev.ccremote.lan` | Android package id; do not change (signing identity). |
-| `android.version_name` | `3.0.0-pager.7` | Mirrors the distribution version. |
-| `android.version_code` | `30016` | Android version code; must strictly increase for every APK. |
+| `android.version_name` | `3.0.0-pager.8` | Mirrors the distribution version. |
+| `android.version_code` | `30017` | Android version code; must strictly increase for every APK. |
 
 Build scripts and CI consume this file; `python -m deploy.validate_release_metadata`
 asserts the backend, web build manifest, `install.sh` defaults, Android Gradle
@@ -31,7 +31,7 @@ validator.
 ## Release tag contract
 
 The only tag that may publish a release is the canonical distribution tag
-(`v3.0.0-pager.7`, derived from `deploy/release-metadata.json` →
+(`v3.0.0-pager.8`, derived from `deploy/release-metadata.json` →
 `distribution_version`). The workflow triggers only on pre-release-shaped tags
 (`v*.*.*-*`) and its `verify` job then rejects anything except the canonical
 distribution tag. The bare product tag `v3.0.0` is **not** a trigger pattern and

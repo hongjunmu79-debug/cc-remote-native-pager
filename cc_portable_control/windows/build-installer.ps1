@@ -42,7 +42,7 @@
 
 .EXAMPLE
     & .\build-installer.ps1 -StageDir C:\repo\dist\stage `
-        -DistributionVersion 3.0.0-pager.7 -ProductVersion 3.0.0 `
+        -DistributionVersion 3.0.0-pager.8 -ProductVersion 3.0.0 `
         -OutputDir C:\repo\dist
 #>
 [CmdletBinding()]
