@@ -45,13 +45,13 @@ def test_v3_product_version_is_consistent_across_runtime_and_web_metadata():
 
 
 def test_canonical_release_metadata_defines_the_pager_distribution():
-    assert METADATA.distribution_version == "3.0.0-pager.8"
+    assert METADATA.distribution_version == "3.0.0-pager.9"
     assert METADATA.protocol == PROTOCOL_VERSION == 19
     assert METADATA.android.application_id == "dev.ccremote.lan"
-    assert METADATA.android.version_code == 30017
+    assert METADATA.android.version_code == 30018
     assert METADATA.android.version_name == METADATA.distribution_version
     assert METADATA.repository.slug == "hongjunmu79-debug/cc-remote-native-pager"
-    assert METADATA.release_tag == "v3.0.0-pager.8"
+    assert METADATA.release_tag == "v3.0.0-pager.9"
 
 
 def test_release_docs_distinguish_product_and_wire_protocol_versions():
@@ -93,3 +93,4 @@ def test_readmes_reference_the_real_repository_and_distribution_release():
             f"{METADATA.release_tag}"
         ) in document
         assert "muggle-stack/cc-remote" not in document
+

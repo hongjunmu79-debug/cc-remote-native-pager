@@ -471,7 +471,7 @@ def test_role_locks_and_release_workflow_are_versioned_inputs():
         encoding="utf-8"
     )
     assert "tags:" in workflow
-    # Only pre-release-shaped distribution tags (v3.0.0-pager.8) are trigger
+    # Only pre-release-shaped distribution tags (v3.0.0-pager.9) are trigger
     # patterns. The bare product tag (v3.0.0) must never be a release tag, so
     # it is absent from the trigger list entirely; the verify job additionally
     # enforces the exact canonical tag from deploy/release-metadata.json.
@@ -551,7 +551,7 @@ def test_release_tag_contract_accepts_only_canonical_distribution_tag():
         f"v{load_release_metadata(ROOT / 'deploy' / 'release-metadata.json').product_version}"
     )
     assert product != expected
-    for tag in (product, "v9.9.9", "v3.0.0-pager.9", "3.0.0-pager.8", ""):
+    for tag in (product, "v9.9.9", "v3.0.0-pager.10", "3.0.0-pager.10", ""):
         with pytest.raises(TagContractError, match="canonical distribution tag"):
             verify_release_tag(tag, ROOT)
 
@@ -629,3 +629,4 @@ def test_release_smoke_bundle_root_derives_from_canonical_distribution_version()
     assert "cc-remote-{role}-v{distribution_version}" in (
         ROOT / "deploy" / "build_release.py"
     ).read_text(encoding="utf-8")
+

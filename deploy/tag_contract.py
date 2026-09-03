@@ -1,7 +1,7 @@
 """Release tag contract.
 
 The only tag that may publish a release is the canonical distribution tag
-(``v3.0.0-pager.8``). The bare product tag (``v3.0.0``) and every other tag must
+(``v3.0.0-pager.9``). The bare product tag (``v3.0.0``) and every other tag must
 be rejected: a release has to line up with the distribution version, the
 Android ``version_name``, and the pinned signer fingerprint.
 
@@ -22,7 +22,7 @@ class TagContractError(ValueError):
 
 
 def canonical_distribution_tag(root: Path) -> str:
-    """Return ``v{metadata.distribution_version}`` (e.g. ``v3.0.0-pager.8``)."""
+    """Return ``v{metadata.distribution_version}`` (e.g. ``v3.0.0-pager.9``)."""
     metadata_path = Path(root) / "deploy" / RELEASE_METADATA_FILENAME
     return f"v{load_release_metadata(metadata_path).distribution_version}"
 
@@ -36,3 +36,4 @@ def verify_release_tag(tag: str, root: Path) -> str:
             f"release tag {tag!r} is not the canonical distribution tag {expected!r}"
         )
     return expected
+
