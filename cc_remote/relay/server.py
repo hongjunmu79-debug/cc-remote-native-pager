@@ -1120,7 +1120,7 @@ def create_app(
         if role is None:
             token = websocket.cookies.get(SESSION_COOKIE_NAME, "")
             origin = websocket.headers.get("origin", "")
-            origin_ok = _origin_allowed(origin, cfg)
+            origin_ok = bool(origin) and _origin_allowed(origin, cfg)
             claims = session_token_claims(token, cfg.session_secret)
             if (
                 claims is not None
