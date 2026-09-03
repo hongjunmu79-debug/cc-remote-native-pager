@@ -121,7 +121,7 @@ def _advertised_origin(cfg: RelayConfig) -> str:
 def _origin_allowed(origin: str, cfg: RelayConfig) -> bool:
     if not origin:
         return True
-    return origin.rstrip("/") in {
+    return origin in {
         cfg.public_origin.rstrip("/"), _advertised_origin(cfg).rstrip("/")
     }
 

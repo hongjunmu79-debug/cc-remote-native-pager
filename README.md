@@ -4,7 +4,7 @@
 
 自托管 · 双引擎 · 多会话 · 实时进程 · 响应式 Web
 
-**当前版本：v3.0.0** · 发行版 `3.0.0-pager.11` · Wire protocol v19
+**当前版本：v3.0.0** · 发行版 `3.0.0-pager.12` · Wire protocol v19
 
 [English](README_en.md) ·
 [旅程一：局域网内 Windows + Android](#旅程一局域网内-windows--android) ·
@@ -232,7 +232,7 @@ python -m cc_remote.wrapper        # 驱动本地 claude / codex CLI
 `SHA256SUMS`：
 
 ```bash
-release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.11
+release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.12
 curl -fLO "$release/install.sh"
 curl -fLO "$release/SHA256SUMS"
 

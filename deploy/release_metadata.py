@@ -7,8 +7,8 @@ Build and verification scripts consume or validate this file so unchecked
 literals cannot drift between tiers.
 
 The product version (``3.0.0``) identifies the shared backend/web codebase.
-The distribution version (``3.0.0-pager.11``) identifies the Android-pager
-release line and is what release tags (``v3.0.0-pager.11``) and install scripts
+The distribution version (``3.0.0-pager.12``) identifies the Android-pager
+release line and is what release tags (``v3.0.0-pager.12``) and install scripts
 target. Protocol 19 is unchanged by the pager distribution.
 """
 from __future__ import annotations
@@ -71,7 +71,7 @@ class ReleaseMetadata:
 
     @property
     def release_tag(self) -> str:
-        """Release tag (`v3.0.0-pager.11`) used by GitHub releases and installers."""
+        """Release tag (`v3.0.0-pager.12`) used by GitHub releases and installers."""
         return f"v{self.distribution_version}"
 
 
