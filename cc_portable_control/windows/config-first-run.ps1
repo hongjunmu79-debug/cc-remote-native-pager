@@ -77,6 +77,13 @@ Set-StrictMode -Version 2.0
 
 function Write-Step { param([string]$Message) Write-Host "[cc-remote] $Message" -ForegroundColor Cyan }
 
+function Get-CommandSource {
+    param([string]$Name)
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    return $null
+}
+
 function Read-NonEmpty {
     param(
         [string]$Prompt,
@@ -104,28 +111,56 @@ function Read-Password {
 }
 
 function Get-LanIpCandidate {
+    param([string]$Python, [string]$WinConfig)
     try {
-        $addresses = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-            Where-Object { $_.IPAddress -notlike '169.254.*' } |
-            Select-Object -ExpandProperty IPAddress
-        foreach ($address in $addresses) {
-            $octets = $address.Split('.')
-            if ($octets.Count -ne 4) { continue }
-            $a = [int]$octets[0]
-            $b = [int]$octets[1]
-            if (($a -eq 10) -or ($a -eq 172 -and $b -ge 16 -and $b -le 31) -or ($a -eq 192 -and $b -eq 168)) {
-                return $address
+        # Flatten Windows network facts and let win_config.py apply the same
+        # deterministic ranking exercised by CI. A raw Get-NetIPAddress first
+        # match commonly selects WSL/Hyper-V instead of the Wi-Fi adapter.
+        $records = @()
+        foreach ($configuration in @(Get-NetIPConfiguration -ErrorAction Stop)) {
+            $adapter = Get-NetAdapter -InterfaceIndex $configuration.InterfaceIndex `
+                -ErrorAction SilentlyContinue
+            $route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "0.0.0.0/0" `
+                -InterfaceIndex $configuration.InterfaceIndex -ErrorAction SilentlyContinue |
+                Sort-Object @{ Expression = { $_.RouteMetric + $_.InterfaceMetric } } |
+                Select-Object -First 1
+            $gateway = @($configuration.IPv4DefaultGateway | Select-Object -First 1)
+            foreach ($address in @($configuration.IPv4Address)) {
+                $records += [pscustomobject]@{
+                    ip = [string]$address.IPAddress
+                    gateway = if ($gateway.Count -gt 0) { [string]$gateway[0].NextHop } else { "" }
+                    interface_alias = [string]$configuration.InterfaceAlias
+                    interface_description = [string]$configuration.InterfaceDescription
+                    adapter_status = if ($adapter) { [string]$adapter.Status } else { "Up" }
+                    hardware_interface = if ($adapter) { [bool]$adapter.HardwareInterface } else { $false }
+                    address_state = [string]$address.AddressState
+                    skip_as_source = [bool]$address.SkipAsSource
+                    metric = if ($route) { [int]($route.RouteMetric + $route.InterfaceMetric) } else { [int]::MaxValue }
+                }
             }
         }
-    } catch { }
+        if ($records.Count -eq 0) { return $null }
+        $json = ConvertTo-Json -InputObject @($records) -Compress -Depth 4
+        $selected = $json | & $Python $WinConfig "select-lan-ip" 2>$null |
+            Select-Object -First 1
+        $selectorExitCode = $LASTEXITCODE
+        Write-Verbose "LAN selector considered $($records.Count) address(es); exit=$selectorExitCode selected=$selected"
+        # Windows PowerShell 5 can leave LASTEXITCODE at -1 for a successful
+        # native process used in a pipeline. The selector prints nothing on
+        # failure, so a non-empty value is the reliable success contract.
+        if ($selected) { return ([string]$selected).Trim() }
+    } catch {
+        Write-Warning "Automatic LAN address detection failed: $($_.Exception.Message)"
+    }
     return $null
 }
 
 function New-StrongSecret {
     # Cryptographically strong 64-hex-char secret (256 bits of entropy).
     $bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [System.Convert]::ToHexString($bytes).ToLowerInvariant()
+    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
+    return ([System.BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
 }
 
 function Import-SeedFile {
@@ -195,7 +230,7 @@ if (-not $Workspace) {
 
 if (-not $PublicOrigin) { $PublicOrigin = $seed["PUBLIC_ORIGIN"] }
 if (-not $PublicOrigin) {
-    $lanIp = Get-LanIpCandidate
+    $lanIp = Get-LanIpCandidate -Python $VenvPython -WinConfig $winConfig
     $default = if ($lanIp) { "http://$lanIp`:$RelayPort" } else { "http://127.0.0.1`:$RelayPort" }
     if ($Unattended) { $PublicOrigin = $default }
     else { $PublicOrigin = Read-NonEmpty -Prompt "Public origin (http://LAN-IP:8765 or https://your-domain)" -Default $default }
@@ -211,15 +246,14 @@ if ($seed["RELAY_PORT"]) {
 }
 
 # --- Validate + render via the shared Python source of truth ------------------
-$claudeBin = if ($seed["CLAUDE_BIN"]) { $seed["CLAUDE_BIN"] } else { (Get-Command claude -ErrorAction SilentlyContinue).Source }
-$codexBin = if ($seed["CC_REMOTE_CODEX_BIN"]) { $seed["CC_REMOTE_CODEX_BIN"] } else { (Get-Command codex -ErrorAction SilentlyContinue).Source }
+$claudeBin = if ($seed["CLAUDE_BIN"]) { $seed["CLAUDE_BIN"] } else { Get-CommandSource "claude" }
+$codexBin = if ($seed["CC_REMOTE_CODEX_BIN"]) { $seed["CC_REMOTE_CODEX_BIN"] } else { Get-CommandSource "codex" }
 
 if (-not $StaticDir) { $StaticDir = Join-Path $InstallRoot "releases\current\web\dist" }
 
 $commonArgs = @(
     $winConfig,
     "render-env",
-    "--login-password", $LoginPassword,
     "--machine-name", $MachineName,
     "--workspace", $Workspace,
     "--public-origin", $PublicOrigin,
@@ -228,19 +262,31 @@ $commonArgs = @(
     "--work-root", (Join-Path $InstallRoot "state\work"),
     "--static-dir", $StaticDir
 )
+if ($LoginPassword) { $commonArgs += "--login-password"; $commonArgs += $LoginPassword }
 if ($AllowInsecureHttp) { $commonArgs += "--insecure" }
 if ($claudeBin) { $commonArgs += "--claude-bin"; $commonArgs += $claudeBin }
 if ($codexBin) { $commonArgs += "--codex-bin"; $commonArgs += $codexBin }
 
 # Validate first (no secrets involved) so we can re-prompt cleanly.
-$validation = & $VenvPython $winConfig "validate-answers" `
-    --login-password $LoginPassword `
-    --machine-name $MachineName `
-    --workspace $Workspace `
-    --public-origin $PublicOrigin `
-    --relay-port "$RelayPort" `
-    $(if ($AllowInsecureHttp) { "--insecure" }) 2>&1
-if ($LASTEXITCODE -ne 0) {
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $validationArgs = @(
+        $winConfig,
+        "validate-answers",
+        "--machine-name", $MachineName,
+        "--workspace", $Workspace,
+        "--public-origin", $PublicOrigin,
+        "--relay-port", "$RelayPort"
+    )
+    if ($LoginPassword) { $validationArgs += "--login-password"; $validationArgs += $LoginPassword }
+    if ($AllowInsecureHttp) { $validationArgs += "--insecure" }
+    $validation = & $VenvPython $validationArgs 2>&1
+    $validationCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
+if ($validationCode -ne 0) {
     if ($Unattended) {
         throw "first-run answers invalid:`n$($validation -join "`n")"
     }
@@ -257,9 +303,12 @@ $wrapperToken = New-StrongSecret
 [Environment]::SetEnvironmentVariable("CCW_SESSION_SECRET", $sessionSecret)
 [Environment]::SetEnvironmentVariable("CCW_WRAPPER_TOKEN", $wrapperToken)
 try {
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $rendered = & $VenvPython $commonArgs 2>&1
     $renderCode = $LASTEXITCODE
 } finally {
+    $ErrorActionPreference = $previousErrorAction
     [Environment]::SetEnvironmentVariable("CCW_SESSION_SECRET", $null)
     [Environment]::SetEnvironmentVariable("CCW_WRAPPER_TOKEN", $null)
 }

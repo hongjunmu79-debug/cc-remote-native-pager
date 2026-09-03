@@ -352,6 +352,9 @@ assert.equal(classifyBusySubmit("interrupting", "queue", true), "enqueue");
 
 const loginFormSource = readFileSync(resolve(
   process.cwd(), "src/components/LoginForm.tsx"), "utf8");
+assert.match(loginFormSource, /window\.location\.hostname\.toLowerCase\(\)/);
+assert.match(loginFormSource, /host === "127\.0\.0\.1"[\s\S]*void startPairing\(\)/,
+  "the local Windows console must render a pairing QR without an extra click");
 assert.match(loginFormSource, /type=\{passwordVisible \? "text" : "password"\}/);
 assert.match(loginFormSource, /name="password"/);
 assert.match(loginFormSource, /autoComplete="current-password"/);

@@ -71,11 +71,67 @@ Source: "{#StageDir}\cc_portable_control\*"; DestDir: "{app}\release\cc_portable
 Source: "{#StageDir}\payload\*"; DestDir: "{app}\release\payload"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Run]
-; setup.ps1 performs the real install into {app} (the user-chosen install
-; root). The wizard waits for it to finish so failures surface to the user.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""setup.ps1"" {#SetupArgs}"; WorkingDir: "{app}\release"; Flags: waituntilterminated; StatusMsg: "Installing cc-remote (this may take a minute)..."
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; Description: "Open cc-remote console"; Flags: postinstall nowait skipifsilent
 
 [Icons]
 Name: "{group}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
 Name: "{autodesktop}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
+
+[Code]
+var
+  SetupFailed: Boolean;
+  SetupFailureMessage: String;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  PowerShell: String;
+  Parameters: String;
+begin
+  if CurStep <> ssPostInstall then
+    exit;
+
+  { Run the real transactional installer ourselves so a non-zero child exit
+    aborts Setup. A plain [Run] entry records the child failure in its log but
+    still returns overall success, leaving users with an extracted shell and
+    no configured app. }
+  PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  Parameters := ExpandConstant(
+    '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    'Start-Transcript -Path ''{app}\installer-setup.log'' -Force | Out-Null; ' +
+    '& ''{app}\release\setup.ps1'' -InstallRoot ''{app}'' {#SetupArgs}"'
+  );
+  if not Exec(
+    PowerShell,
+    Parameters,
+    ExpandConstant('{app}\release'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then begin
+    SetupFailed := True;
+    SetupFailureMessage := 'Unable to start the cc-remote setup script.';
+  end else if ResultCode <> 0 then begin
+    SetupFailed := True;
+    SetupFailureMessage := Format('cc-remote setup failed with exit code %d.', [ResultCode]);
+  end;
+
+  if SetupFailed then
+    SuppressibleMsgBox(SetupFailureMessage, mbCriticalError, MB_OK, IDOK);
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  if SetupFailed then
+    Result := 20
+  else
+    Result := 0;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and SetupFailed then begin
+    WizardForm.FinishedHeadingLabel.Caption := 'cc-remote setup failed';
+    WizardForm.FinishedLabel.Caption := SetupFailureMessage;
+  end;
+end;

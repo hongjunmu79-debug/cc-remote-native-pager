@@ -15,12 +15,12 @@ Everything that varies per release lives in one file:
 | Key | Current value | Meaning |
 | --- | --- | --- |
 | `product_version` | `3.0.0` | Base cc-remote backend/web codebase version. |
-| `distribution_version` | `3.0.0-pager.5` | Android-pager release line; what release tags and installers target. |
+| `distribution_version` | `3.0.0-pager.7` | Android-pager release line; what release tags and installers target. |
 | `protocol` | `19` | Wire protocol. Unchanged by the pager distribution. |
 | `repository.owner/name` | `hongjunmu79-debug/cc-remote-native-pager` | Public repository identity used by URLs and install scripts. |
 | `android.application_id` | `dev.ccremote.lan` | Android package id; do not change (signing identity). |
-| `android.version_name` | `3.0.0-pager.5` | Mirrors the distribution version. |
-| `android.version_code` | `30014` | Android version code; must strictly increase for every APK. |
+| `android.version_name` | `3.0.0-pager.7` | Mirrors the distribution version. |
+| `android.version_code` | `30016` | Android version code; must strictly increase for every APK. |
 
 Build scripts and CI consume this file; `python -m deploy.validate_release_metadata`
 asserts the backend, web build manifest, `install.sh` defaults, Android Gradle
@@ -31,7 +31,7 @@ validator.
 ## Release tag contract
 
 The only tag that may publish a release is the canonical distribution tag
-(`v3.0.0-pager.5`, derived from `deploy/release-metadata.json` →
+(`v3.0.0-pager.7`, derived from `deploy/release-metadata.json` →
 `distribution_version`). The workflow triggers only on pre-release-shaped tags
 (`v*.*.*-*`) and its `verify` job then rejects anything except the canonical
 distribution tag. The bare product tag `v3.0.0` is **not** a trigger pattern and
@@ -72,11 +72,11 @@ job `needs: verify`. **A failure in any gate makes publication impossible.**
 - **Linux/macOS bundles:** built by `deploy/build_release.py` in CI. They embed a
   pinned `uv`, the hashed role lockfile, the MIT license, and the release
   manifest. Byte-identical for the same git SHA + `SOURCE_DATE_EPOCH` + sources.
-- **Windows:** built by `packaging\windows\build.ps1` → two deterministic zips
+- **Windows:** built by `cc_portable_control\windows\build.ps1` → two deterministic zips
   (installer/bootstrap and portable) + one genuine Inno Setup installer `.exe`,
   each with a `.sha256` sidecar, all assembled from one staged, smoke-verified
   payload. The installer build fails closed if ISCC (Inno Setup) is absent.
-  See [`packaging/windows/README.md`](../../packaging/windows/README.md).
+  See [`cc_portable_control/windows/README.md`](../../cc_portable_control/windows/README.md).
 - **Android APK:** built by Gradle in `android-native/`. Release assets come
   from CI only — do not manually upload a machine-built APK.
 

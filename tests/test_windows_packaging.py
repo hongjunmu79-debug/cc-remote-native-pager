@@ -20,10 +20,10 @@ from cc_portable_control.windows import win_build, win_config, win_layout, win_m
 METADATA = {
     "schema": 1,
     "product_version": "3.0.0",
-    "distribution_version": "3.0.0-pager.5",
+    "distribution_version": "3.0.0-pager.7",
     "protocol": 19,
     "repository": {"owner": "hongjunmu79-debug", "name": "cc-remote-native-pager"},
-    "android": {"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.5", "version_code": 30014},
+    "android": {"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.7", "version_code": 30016},
 }
 
 
@@ -191,6 +191,62 @@ def test_is_private_or_local_ip(host, expected):
     assert win_config.is_private_or_local_ip(host) is expected
 
 
+def test_select_lan_ip_prefers_gateway_wifi_over_wsl_and_tunnel():
+    candidates = [
+        {
+            "ip": "172.20.224.1",
+            "gateway": "",
+            "interface_alias": "vEthernet (WSL)",
+            "interface_description": "Hyper-V Virtual Ethernet Adapter",
+            "adapter_status": "Up",
+            "hardware_interface": False,
+            "address_state": "Preferred",
+            "skip_as_source": False,
+            "metric": 2**31 - 1,
+        },
+        {
+            "ip": "198.18.0.1",
+            "gateway": "198.18.0.2",
+            "interface_alias": "FlClash",
+            "interface_description": "Meta Tunnel",
+            "adapter_status": "Up",
+            "hardware_interface": False,
+            "address_state": "Preferred",
+            "skip_as_source": False,
+            "metric": 0,
+        },
+        {
+            "ip": "192.168.10.55",
+            "gateway": "192.168.10.1",
+            "interface_alias": "WLAN",
+            "interface_description": "Intel Wi-Fi",
+            "adapter_status": "Up",
+            "hardware_interface": True,
+            "address_state": "Preferred",
+            "skip_as_source": False,
+            "metric": 55,
+        },
+    ]
+    assert win_config.select_lan_ip(candidates) == "192.168.10.55"
+
+
+def test_select_lan_ip_has_safe_physical_fallback_and_rejects_bad_sources():
+    candidates = [
+        {"ip": "127.0.0.1", "adapter_status": "Up"},
+        {"ip": "192.168.5.8", "adapter_status": "Down"},
+        {"ip": "10.0.0.9", "adapter_status": "Up", "skip_as_source": True},
+        {
+            "ip": "172.16.4.20",
+            "adapter_status": "Up",
+            "hardware_interface": True,
+            "address_state": "Preferred",
+            "metric": 80,
+        },
+    ]
+    assert win_config.select_lan_ip(candidates) == "172.16.4.20"
+    assert win_config.select_lan_ip(candidates[:3]) is None
+
+
 def test_validate_public_origin():
     # HTTPS accepts any root origin.
     assert win_config.validate_public_origin(
@@ -263,7 +319,7 @@ def test_build_env_content_round_trips():
     assert env["WRAPPER_TOKEN"] == "w" * 64
     assert env["CC_REMOTE_MACHINE_ID"] == "desktop-1"
     assert env["CC_CWD"] == r"C:\Users\alice\projects"
-    assert env["RELAY_URL"] == "ws://192.168.1.50:8765/ws"
+    assert env["RELAY_URL"] == "ws://127.0.0.1:8765/ws"
     assert env["CLAUDE_BIN"] == r"C:\Program Files\claude\claude.exe"
     assert env["WEB_STATIC_DIR"] == r"C:\Users\alice\cc-remote\releases\current\web\dist"
     assert env["RELAY_HOST"] == "0.0.0.0"
@@ -330,6 +386,35 @@ def test_win_config_cli_validate_answers():
     assert proc.returncode != 0
 
 
+def test_win_config_cli_select_lan_ip():
+    proc = subprocess.run(
+        [sys.executable, str(Path(win_config.__file__)), "select-lan-ip"],
+        input=json.dumps([
+            {
+                "ip": "172.20.224.1",
+                "gateway": "",
+                "interface_alias": "vEthernet (WSL)",
+                "adapter_status": "Up",
+                "address_state": "Preferred",
+            },
+            {
+                "ip": "192.168.10.55",
+                "gateway": "192.168.10.1",
+                "interface_alias": "WLAN",
+                "adapter_status": "Up",
+                "hardware_interface": True,
+                "address_state": "Preferred",
+                "metric": 55,
+            },
+        ]),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "192.168.10.55"
+
+
 def test_win_config_cli_render_env(tmp_path: Path):
     proc = _run_win_config_cli(
         "render-env",
@@ -347,7 +432,7 @@ def test_win_config_cli_render_env(tmp_path: Path):
     )
     assert proc.returncode == 0, proc.stderr
     assert "SESSION_SECRET=" + "s" * 64 in proc.stdout
-    assert "RELAY_URL=ws://192.168.1.50:8765/ws" in proc.stdout
+    assert "RELAY_URL=ws://127.0.0.1:8765/ws" in proc.stdout
     assert "WEB_STATIC_DIR=" in proc.stdout
 
 
@@ -435,7 +520,7 @@ def test_build_manifest_and_verify_round_trip(tmp_path: Path):
     make_distribution(tmp_path, git_sha="a" * 40)
     assert win_manifest.verify_distribution(tmp_path) == []
     manifest = win_manifest.read_manifest(tmp_path)
-    assert manifest["distribution_version"] == "3.0.0-pager.5"
+    assert manifest["distribution_version"] == "3.0.0-pager.7"
     assert manifest["protocol"] == 19
     assert manifest["git_sha"] == "a" * 40
     assert "cc_remote/__init__.py" in manifest["files"]
@@ -606,6 +691,16 @@ def test_run_clean_install_smoke_passes(tmp_path: Path, monkeypatch: pytest.Monk
     dist = make_distribution(tmp_path / "dist")
     problems = win_smoke.run_clean_install_smoke(dist, tmp_path / "smoke")
     assert problems == []
+
+
+def test_smoke_treats_unix_home_marker_as_same_windows_temp_ancestor():
+    # A Windows path contains the text ``/Users/name`` after separator
+    # normalization.  That must not be mistaken for a leaked macOS path when
+    # the generated config is intentionally rooted below this run's temp tree.
+    temp_root = Path("C:/Users/23715/AppData/Local/Temp/cc-remote-smoke")  # cc-remote-scan-allow: fixture
+    assert win_smoke._path_is_within(temp_root, "C:\\Users\\23715")  # cc-remote-scan-allow: fixture
+    assert win_smoke._path_is_within(temp_root, "/Users/23715")  # cc-remote-scan-allow: fixture
+    assert not win_smoke._path_is_within(temp_root, "/home/23715")  # cc-remote-scan-allow: fixture
 
 
 def test_smoke_refuses_placeholder_password(tmp_path: Path):
@@ -782,7 +877,7 @@ def _render_with_origin(smoke_module, origin: str):
 # ---------------------------------------------------------------------------
 
 
-def _stage_and_build_archive(tmp_path: Path, epoch: int, name: str = "cc-remote-v3.0.0-pager.5-windows-x64.zip") -> tuple[Path, win_build.ReleaseArchive]:
+def _stage_and_build_archive(tmp_path: Path, epoch: int, name: str = "cc-remote-v3.0.0-pager.7-windows-x64.zip") -> tuple[Path, win_build.ReleaseArchive]:
     # Each call gets an isolated source+payload so a build never inherits a
     # previous call's distribution-manifest.json/SHA256SUMS — the same
     # guarantee build.ps1 gives by removing its staging root between runs.
@@ -815,7 +910,7 @@ def test_build_release_archive_is_deterministic(tmp_path: Path):
     _, first = _stage_and_build_archive(tmp_path, 0, name="a.zip")
     _, second = _stage_and_build_archive(tmp_path, 0, name="b.zip")
     assert first.path.read_bytes() == second.path.read_bytes()
-    assert first.distribution_version == "3.0.0-pager.5"
+    assert first.distribution_version == "3.0.0-pager.7"
     assert first.protocol == 19
     assert first.path.suffix == ".zip"
 
@@ -988,7 +1083,7 @@ def test_payload_never_contains_the_packaging_package():
 def _stage_and_build_portable_archive(
     tmp_path: Path,
     epoch: int,
-    name: str = "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip",
+    name: str = "cc-remote-v3.0.0-pager.7-windows-x64-portable.zip",
 ) -> tuple[Path, win_build.ReleaseArchive]:
     stem = Path(name).stem
     source = tmp_path / f"source-{stem}"
@@ -1042,11 +1137,11 @@ def test_portable_archive_is_deterministic_and_named_from_metadata(tmp_path: Pat
     _, second = _stage_and_build_portable_archive(tmp_path, 0, name="b.zip")
     assert first.path.read_bytes() == second.path.read_bytes()
     # The archive carries the canonical version values from release-metadata.json.
-    assert first.distribution_version == "3.0.0-pager.5"
+    assert first.distribution_version == "3.0.0-pager.7"
     assert first.product_version == "3.0.0"
     # build.ps1 derives the artifact name from distribution_version.
     default = _stage_and_build_portable_archive(tmp_path, 0)
-    assert default[1].path.name == "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip"
+    assert default[1].path.name == "cc-remote-v3.0.0-pager.7-windows-x64-portable.zip"
 
 
 def test_portable_archive_requires_start_portable(tmp_path: Path):
@@ -1100,6 +1195,49 @@ def test_config_first_run_accepts_static_dir():
     assert '"--static-dir", $StaticDir' in script
 
 
+def test_fresh_windows_install_uses_bundled_uv_without_system_python():
+    installer = _repo_packaging_script("install.ps1")
+    assert 'Get-CommandSource "py"' in installer
+    assert 'Get-CommandSource "python"' in installer
+    assert "$uvExe run --no-project --python $pythonVersion" in installer
+    assert "@Arguments | Out-Host" in installer
+    assert "python install $pythonVersion" not in installer
+    assert "venv $venvDir --python $pythonVersion | Out-Host" not in installer
+    assert "pip install --python $venvPython" in installer
+    assert 'UV_DATA_DIR = Join-Path $runtimeDir "uv-data"' in installer
+    assert 'UV_CACHE_DIR = Join-Path $runtimeDir "uv-cache"' in installer
+    assert 'UV_PYTHON_INSTALL_DIR = Join-Path $runtimeDir "python"' in installer
+    assert 'UV_PYTHON_NO_REGISTRY = "1"' in installer
+    assert 'UV_LINK_MODE = "copy"' in installer
+    assert 'payload "runtime-bundle.zip"' in installer
+    assert "Expand-Archive" in installer
+    assert "Set-VenvHome" in installer
+    assert "System.Security.Cryptography.SHA256" in installer
+    assert "$bootstrapPython" in installer
+    assert installer.index("$bootstrapPython") < installer.index("$uvExe run --no-project")
+    assert "if (-not $usedBundledVenv)" in installer
+    builder = _repo_packaging_script("build.ps1")
+    assert "python find --managed-python $pythonVersion" in builder
+    assert 'payload "runtime\\python"' in builder
+    assert 'payload "runtime\\.venv"' in builder
+    assert "--no-python-downloads venv" in builder
+    assert "--bundle-tree" in builder
+    assert "runtime-bundle.zip" in builder
+    assert "python install $pythonVersion 2>&1" not in installer
+    wizard = _repo_packaging_script("config-first-run.ps1")
+    assert 'Get-CommandSource "claude"' in wizard
+    assert 'Get-CommandSource "codex"' in wizard
+    assert "$validationCode = $LASTEXITCODE" in wizard
+    assert '$ErrorActionPreference = "Continue"' in wizard
+    assert "if ($selected)" in wizard
+    assert wizard.count('if ($LoginPassword) {') >= 2
+    assert '"--login-password", $LoginPassword,' not in wizard
+    assert "RandomNumberGenerator]::Create()" in wizard
+    assert "BitConverter]::ToString" in wizard
+    assert "RandomNumberGenerator]::Fill" not in wizard
+    assert "Convert]::ToHexString" not in wizard
+
+
 def test_inno_installer_is_a_real_installer_and_build_fails_closed():
     # The .iss must produce a genuine installer: it extracts setup.ps1 + the
     # cc_portable_control scripts + the verified payload and RUNS setup.ps1, so the exe
@@ -1120,8 +1258,18 @@ def test_inno_installer_is_a_real_installer_and_build_fails_closed():
     assert "open-console.ps1" in iss
     assert "postinstall" in iss
     assert "-Unattended -AllowInsecureHttp" in iss
+    assert "procedure CurStepChanged" in iss
+    assert "ewWaitUntilTerminated" in iss
+    assert "if ResultCode <> 0 then" in iss
+    assert "function GetCustomSetupExitCode" in iss
+    assert "SetupFailed := True" in iss
+    assert "Result := 20" in iss
+    assert "-InstallRoot ''{app}''" in iss
+    assert 'Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""setup.ps1""' not in iss
     builder = _repo_packaging_script("build-installer.ps1")
     assert "ISCC.exe" in builder
+    assert 'Join-Path $env:LOCALAPPDATA "Programs\\Inno Setup 6\\ISCC.exe"' in builder
+    assert "if ($isccCommand)" in builder
     assert "Refusing to emit a fake installer" in builder
     assert "-NoServices" in builder
 
@@ -1240,7 +1388,7 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
     script = _repo_packaging_script("build.ps1")
     assert "Set-StrictMode -Version 2.0" in script
     assert "Split-Path -Leaf $path" in script
-    assert "$\{path}.sha256" in script
+    assert "${path}.sha256" in script
     # Root-cause guard for the run-33120966288 failure: Invoke-ArchiveAssembly
     # captures the subprocess stdout that used to leak into the return value.
     assert "$buildOutput = & $python" in script
@@ -1255,14 +1403,14 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
             "Set-StrictMode -Version 2.0;"
             "$ErrorActionPreference = 'Stop';"
             "$paths = @("
-            "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64.zip', "
-            "'C:\\out\\cc-remote-v3.0.0-pager.5-windows-x64-portable.zip');"
-            "$leaves = foreach ($p in $paths) \{ Split-Path -Leaf $p };"
-            "if ($leaves[0] -ne 'cc-remote-v3.0.0-pager.5-windows-x64.zip') "
-            "\{ throw 'leaf0 mismatch' };"
+            "'C:\\out\\cc-remote-v3.0.0-pager.7-windows-x64.zip', "
+            "'C:\\out\\cc-remote-v3.0.0-pager.7-windows-x64-portable.zip');"
+            "$leaves = foreach ($p in $paths) { Split-Path -Leaf $p };"
+            "if ($leaves[0] -ne 'cc-remote-v3.0.0-pager.7-windows-x64.zip') "
+            "{ throw 'leaf0 mismatch' };"
             "if ($leaves[1] -ne "
-            "'cc-remote-v3.0.0-pager.5-windows-x64-portable.zip') "
-            "\{ throw 'leaf1 mismatch' };"
+            "'cc-remote-v3.0.0-pager.7-windows-x64-portable.zip') "
+            "{ throw 'leaf1 mismatch' };"
             "Write-Output 'strict-mode split-path ok'",
         ],
         capture_output=True,
@@ -1322,14 +1470,14 @@ $ErrorActionPreference = "Stop"
 # resolve even when command autoloading is unreliable.
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 
-function Get-Sha256Hex \{
+function Get-Sha256Hex {
     param([string]$Path)
     # Lowercase hex, the same format build.ps1 writes into the .sha256 sidecars.
     $sha = [System.Security.Cryptography.SHA256]::Create()
-    try \{
+    try {
         $bytes = [System.IO.File]::ReadAllBytes($Path)
         $hash = $sha.ComputeHash($bytes)
-    } finally \{
+    } finally {
         $sha.Dispose()
     }
     return [System.BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
@@ -1341,7 +1489,7 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 # prints the assembled path on stdout, so the call MUST capture it. A leaked
 # stdout line made the return value a 2-element array and corrupted the
 # sidecar loop on the real runner (manual Release run 33120966288).
-function Invoke-ArchiveAssembly \{
+function Invoke-ArchiveAssembly {
     param([string]$Name, [string[]]$ExtraArgs)
     $archivePath = Join-Path $OutputDir $Name
     $buildOutput = & $Python $WinBuildPy `
@@ -1351,47 +1499,47 @@ function Invoke-ArchiveAssembly \{
         --source-date-epoch 0 `
         --git-sha '0000000000000000000000000000000000000000' `
         @ExtraArgs
-    if ($LASTEXITCODE -ne 0) \{ throw "archive assembly failed: $Name" }
+    if ($LASTEXITCODE -ne 0) { throw "archive assembly failed: $Name" }
     return $archivePath
 }
 
 $installerArchivePath = Invoke-ArchiveAssembly `
-    -Name 'cc-remote-v3.0.0-pager.5-windows-x64.zip' `
+    -Name 'cc-remote-v3.0.0-pager.7-windows-x64.zip' `
     -ExtraArgs @('--setup', $Setup)
 $portableArchivePath = Invoke-ArchiveAssembly `
-    -Name 'cc-remote-v3.0.0-pager.5-windows-x64-portable.zip' `
+    -Name 'cc-remote-v3.0.0-pager.7-windows-x64-portable.zip' `
     -ExtraArgs @('--portable', '--start-portable', $StartPortable, '--readme', $Readme)
 
-if (@($installerArchivePath).Count -ne 1) \{ throw "installer path is not a scalar (stdout leaked)" }
-if (@($portableArchivePath).Count -ne 1) \{ throw "portable path is not a scalar (stdout leaked)" }
+if (@($installerArchivePath).Count -ne 1) { throw "installer path is not a scalar (stdout leaked)" }
+if (@($portableArchivePath).Count -ne 1) { throw "portable path is not a scalar (stdout leaked)" }
 
-foreach ($path in @($installerArchivePath, $portableArchivePath)) \{
-    if ($path -isnot [string]) \{ throw "archive path is not a scalar string: $path" }
+foreach ($path in @($installerArchivePath, $portableArchivePath)) {
+    if ($path -isnot [string]) { throw "archive path is not a scalar string: $path" }
     $leaf = Split-Path -Leaf $path
     $sha = Get-Sha256Hex $path
     $size = (Get-Item $path).Length
-    if ($size -lt 1) \{ throw "archive is not a real file: $leaf" }
-    Set-Content -Path "$\{path}.sha256" -Value "$sha  $leaf" -Encoding ascii
+    if ($size -lt 1) { throw "archive is not a real file: $leaf" }
+    Set-Content -Path "${path}.sha256" -Value "$sha  $leaf" -Encoding ascii
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-foreach ($path in @($installerArchivePath, $portableArchivePath)) \{
+foreach ($path in @($installerArchivePath, $portableArchivePath)) {
     $leaf = Split-Path -Leaf $path
-    $sidecar = "$\{path}.sha256"
-    if (-not (Test-Path $sidecar)) \{ throw "missing sidecar for $leaf" }
+    $sidecar = "${path}.sha256"
+    if (-not (Test-Path $sidecar)) { throw "missing sidecar for $leaf" }
     $expectedSha = Get-Sha256Hex $path
     $content = (Get-Content -Path $sidecar -Raw).Trim()
-    if ($content -ne "$expectedSha  $leaf") \{ throw "sidecar content mismatch for $\{leaf}: [$content]" }
+    if ($content -ne "$expectedSha  $leaf") { throw "sidecar content mismatch for ${leaf}: [$content]" }
     $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
-    try \{
-        if ($zip.Entries.Count -le 0) \{ throw "archive is empty: $leaf" }
-        $names = @($zip.Entries | ForEach-Object \{ $_.FullName })
-        if ($leaf -like '*portable*') \{
-            if ($names -notcontains 'start-portable.ps1') \{ throw "portable zip missing start-portable.ps1" }
-        } else \{
-            if ($names -notcontains 'setup.ps1') \{ throw "installer zip missing setup.ps1" }
+    try {
+        if ($zip.Entries.Count -le 0) { throw "archive is empty: $leaf" }
+        $names = @($zip.Entries | ForEach-Object { $_.FullName })
+        if ($leaf -like '*portable*') {
+            if ($names -notcontains 'start-portable.ps1') { throw "portable zip missing start-portable.ps1" }
+        } else {
+            if ($names -notcontains 'setup.ps1') { throw "installer zip missing setup.ps1" }
         }
-    } finally \{
+    } finally {
         $zip.Dispose()
     }
 }
@@ -1433,8 +1581,8 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
     assert "archive-loop ok" in proc.stdout
     zips = sorted(p.name for p in output_dir.glob("*.zip"))
     assert zips == [
-        "cc-remote-v3.0.0-pager.5-windows-x64-portable.zip",
-        "cc-remote-v3.0.0-pager.5-windows-x64.zip",
+        "cc-remote-v3.0.0-pager.7-windows-x64-portable.zip",
+        "cc-remote-v3.0.0-pager.7-windows-x64.zip",
     ]
     for zip_name in zips:
         sidecar = output_dir / f"{zip_name}.sha256"
@@ -1461,13 +1609,13 @@ def test_build_ps1_archive_loop_rejects_contaminated_path_array():
             "$ErrorActionPreference = 'Stop';"
             "$contaminated = @('C:\\out\\a.zip', 'C:\\out\\a.zip');"
             "$rejected = $false;"
-            "foreach ($path in @($contaminated, 'C:\\out\\b.zip')) \{"
-            "  try \{"
+            "foreach ($path in @($contaminated, 'C:\\out\\b.zip')) {"
+            "  try {"
             "    if ($path -isnot [string]) "
-            "      \{ throw \"archive path is not a scalar string: $path\" }"
-            "  } catch \{ $rejected = $true }"
+            "      { throw \"archive path is not a scalar string: $path\" }"
+            "  } catch { $rejected = $true }"
             "};"
-            "if (-not $rejected) \{ throw 'contaminated array was accepted' };"
+            "if (-not $rejected) { throw 'contaminated array was accepted' };"
             "Write-Output 'contamination guard ok'",
         ],
         capture_output=True,

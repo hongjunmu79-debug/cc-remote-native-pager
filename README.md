@@ -4,7 +4,7 @@
 
 自托管 · 双引擎 · 多会话 · 实时进程 · 响应式 Web
 
-**当前版本：v3.0.0** · 发行版 `3.0.0-pager.5` · Wire protocol v19
+**当前版本：v3.0.0** · 发行版 `3.0.0-pager.7` · Wire protocol v19
 
 [English](README_en.md) ·
 [旅程一：局域网内 Windows + Android](#旅程一局域网内-windows--android) ·
@@ -95,6 +95,11 @@ Office 产物预览（DOCX/XLSX/PPTX → PDF）另需在 wrapper 主机安装 **
 压缩包形式），同一局域网内的 **Android 手机**运行原生 pager（`dev.ccremote.lan`）
 或响应式 Web 客户端。不需要公网 VPS、域名或 TLS——流量停留在局域网内。
 
+普通用户只需要在 [GitHub Releases](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases)
+下载两个文件：Windows 的 `*-windows-x64-setup.exe` 和 Android 的
+`app-release.apk`。电脑双击安装、手机安装后打开并扫码；不设置密码、不填写 IP，
+也不需要 Python、Node、ADB 或命令行。手工地址与密码只保留为故障恢复入口。
+
 ```
 Android pager / 手机浏览器 ──http://<windows-lan-ip>:8765──▶ Windows 中继+wrapper
                                                                   └─ 驱动本地 claude / codex
@@ -134,12 +139,12 @@ Get-Content -LiteralPath "$($setup[0].FullName).sha256"
 - 升级时保留既有配置，支持干净卸载/回滚，不触碰 Claude/Codex 会话与凭证。
 
 无人值守安装可通过传入配置文件完成。详见
-[packaging/windows/README.md](packaging/windows/README.md)。
+[cc_portable_control/windows/README.md](cc_portable_control/windows/README.md)。
 
 ### 2) 打开控制台并显示配对二维码
 
-安装结束会自动打开本机控制台；以后可双击桌面或开始菜单里的「cc-remote
-控制台」。点击「显示扫码配对二维码」。二维码为一次性、短时凭据，绑定当前
+安装结束会自动打开本机控制台并生成二维码；以后可双击桌面或开始菜单里的
+「cc-remote 控制台」重新生成。二维码为一次性、短时凭据，绑定当前
 `machine_id` 与新客户端；relay 只保存其摘要，二维码过期、使用或 relay 重启后失效。
 
 中继 origin 通常是 `http://192.168.1.23:8765/`。可在另一台机器上验证：
@@ -151,8 +156,8 @@ curl http://<windows-lan-ip>:8765/healthz
 
 ### 3) 安装并打开 Android pager
 
-1. 构建或下载 Android APK（见下方 Android 说明），安装并启动。
-2. 点「扫码」，扫描 Windows 控制台显示的二维码。
+1. 从同一 GitHub Release 下载并安装 `app-release.apk`。
+2. 首次打开会直接进入扫码；对准 Windows 控制台显示的二维码。
 3. App 自动校验 relay origin、兑换 HttpOnly 会话 cookie、保存服务器与设备作用域，
    随后直接进入会话；无需输入域名或密码。手工地址与密码登录仅作为后备。
 4. WebView 持有登录/WebSocket/聊天；原生仪表盘通过桥接层投影同一会话状态。
@@ -227,7 +232,7 @@ python -m cc_remote.wrapper        # 驱动本地 claude / codex CLI
 `SHA256SUMS`：
 
 ```bash
-release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5
+release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.7
 curl -fLO "$release/install.sh"
 curl -fLO "$release/SHA256SUMS"
 
@@ -514,7 +519,7 @@ cc_remote/
   wrapper/         # Claude SDK + Codex app-server / pool / stream / ringbuffer / transport
 web/               # React 客户端（Vite + TS）
 android-native/    # Jetpack Compose pager + WebView shell
-packaging/windows/ # 可复现 Windows 安装包 + 便携压缩包
+cc_portable_control/windows/ # 可复现 Windows 安装包 + 便携压缩包
 tests/             # 零 token 单元测试 + e2e 脚本
 deploy/            # release metadata、Caddyfile / systemd / setup-vps.sh / env 示例
 ```

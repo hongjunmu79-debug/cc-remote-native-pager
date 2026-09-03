@@ -18,6 +18,7 @@ import re
 import secrets
 import shutil
 import sys
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -142,6 +143,67 @@ def is_private_or_local_ip(host: str | None) -> bool:
     return False
 
 
+_VIRTUAL_ADAPTER_MARKERS = (
+    "bluetooth",
+    "hyper-v",
+    "loopback",
+    "tunnel",
+    "virtual",
+    "vpn",
+    "wsl",
+)
+
+
+def select_lan_ip(candidates: Iterable[dict[str, object]]) -> str | None:
+    """Choose the phone-reachable LAN address from Windows adapter facts.
+
+    ``Get-NetIPAddress`` commonly lists WSL/Hyper-V before Wi-Fi.  Taking its
+    first RFC1918 value therefore bakes an unreachable virtual-switch address
+    into the pairing QR.  Prefer an active private address whose adapter owns a
+    private default gateway, then prefer a physical adapter and lower route
+    metric.  A gateway-less physical LAN remains a supported fallback.
+
+    The caller supplies plain records so this policy is deterministic and can
+    be tested on every CI host without requiring its network layout.
+    """
+
+    ranked: list[tuple[tuple[int, int, int, int, str], str]] = []
+    for item in candidates:
+        address = str(item.get("ip") or "").strip()
+        if not is_private_or_local_ip(address) or address.startswith("127."):
+            continue
+        if bool(item.get("skip_as_source", False)):
+            continue
+        status = str(item.get("adapter_status") or "up").strip().lower()
+        if status not in {"up", "connected"}:
+            continue
+        address_state = str(item.get("address_state") or "preferred").strip().lower()
+        if address_state not in {"preferred", "4"}:
+            continue
+
+        gateway = str(item.get("gateway") or "").strip()
+        gateway_rank = 0 if (
+            is_private_or_local_ip(gateway) and not gateway.startswith("127.")
+        ) else 1
+        physical_rank = 0 if bool(item.get("hardware_interface", False)) else 1
+        adapter_text = " ".join(
+            str(item.get(key) or "").lower()
+            for key in ("interface_alias", "interface_description")
+        )
+        virtual_rank = 1 if any(
+            marker in adapter_text for marker in _VIRTUAL_ADAPTER_MARKERS
+        ) else 0
+        try:
+            metric = max(0, int(item.get("metric") or 0))
+        except (TypeError, ValueError):
+            metric = 2**31 - 1
+        ranked.append((
+            (gateway_rank, physical_rank, virtual_rank, metric, address),
+            address,
+        ))
+    return min(ranked, default=((), None))[1]
+
+
 def validate_public_origin(value: str, *, allow_insecure_http: bool) -> list[str]:
     errors: list[str] = []
     try:
@@ -243,7 +305,11 @@ def build_env_content(
     """
     machine_name = answers.machine_name
     origin = answers.public_origin.rstrip("/")
-    relay_url = origin.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + "/ws"
+    # This packaged Windows journey always runs relay and wrapper on the same
+    # machine.  Keep their internal control link on loopback so Wi-Fi/DHCP
+    # changes cannot disconnect the wrapper.  PUBLIC_ORIGIN remains the
+    # phone-facing address embedded in the pairing QR.
+    relay_url = f"ws://127.0.0.1:{answers.relay_port}/ws"
     insecure = "1" if answers.allow_insecure_http else "0"
     claude_value = _dotenv_value(claude_bin) if claude_bin else ""
     codex_value = _dotenv_value(codex_bin) if codex_bin else ""
@@ -430,6 +496,26 @@ def _cli_validate_preserved(argv: list[str]) -> int:
     return 0
 
 
+def _cli_select_lan_ip(argv: list[str]) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.parse_args(argv)
+    try:
+        payload = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError) as error:
+        print(f"invalid network candidate JSON: {error}", file=sys.stderr)
+        return 2
+    if not isinstance(payload, list):
+        payload = [payload]
+    candidates = [item for item in payload if isinstance(item, dict)]
+    selected = select_lan_ip(candidates)
+    if selected is None:
+        return 1
+    print(selected)
+    return 0
+
+
 def _cli_render_env(argv: list[str]) -> int:
     import argparse
 
@@ -486,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cli_render_env(argv[1:])
     if command == "validate-preserved":
         return _cli_validate_preserved(argv[1:])
+    if command == "select-lan-ip":
+        return _cli_select_lan_ip(argv[1:])
     print(f"unknown command: {command}", file=sys.stderr)
     return 2
 

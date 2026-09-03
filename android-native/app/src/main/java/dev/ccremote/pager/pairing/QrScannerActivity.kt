@@ -30,8 +30,10 @@ import java.util.concurrent.Executors
 
 class QrScannerActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
+    private lateinit var statusText: TextView
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var accepted = false
+    private var lastRejectedRaw: String? = null
     private val scanner by lazy {
         BarcodeScanning.getClient(
             BarcodeScannerOptions.Builder()
@@ -68,7 +70,7 @@ class QrScannerActivity : ComponentActivity() {
                     gravity = Gravity.CENTER
                     textSize = 16f
                     setPadding(24, 24, 24, 24)
-                },
+                }.also { statusText = it },
                 FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -135,14 +137,19 @@ class QrScannerActivity : ComponentActivity() {
         val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
         scanner.process(image)
             .addOnSuccessListener { barcodes ->
-                val raw = barcodes.firstNotNullOfOrNull { it.rawValue }
-                if (raw != null && !accepted) {
+                val raw = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue }
+                if (raw != null && !accepted && ClientPairingPayload.parse(raw).isSuccess) {
                     accepted = true
                     setResult(
                         Activity.RESULT_OK,
                         Intent().putExtra(EXTRA_QR_PAYLOAD, raw),
                     )
                     finish()
+                } else if (raw != null && raw != lastRejectedRaw) {
+                    lastRejectedRaw = raw
+                    runOnUiThread {
+                        statusText.text = getString(R.string.qr_scanner_invalid)
+                    }
                 }
             }
             .addOnCompleteListener { proxy.close() }

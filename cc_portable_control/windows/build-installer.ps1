@@ -9,7 +9,7 @@
     cc-remote-v<distribution-version>-windows-x64-setup.exe.
 
     ISCC is located from -IsccPath, the ISCC environment variable, the standard
-    per-machine install paths, or PATH. When it is absent the script FAILS
+    per-user/per-machine install paths, or PATH. When it is absent the script FAILS
     (fail-closed): no silent fallback may produce a fake installer. The .iss is
     validated statically by the zero-token test suite even on machines without
     ISCC.
@@ -42,7 +42,7 @@
 
 .EXAMPLE
     & .\build-installer.ps1 -StageDir C:\repo\dist\stage `
-        -DistributionVersion 3.0.0-pager.5 -ProductVersion 3.0.0 `
+        -DistributionVersion 3.0.0-pager.7 -ProductVersion 3.0.0 `
         -OutputDir C:\repo\dist
 #>
 [CmdletBinding()]
@@ -85,6 +85,7 @@ $iscc = $IsccPath
 if (-not $iscc -and $env:ISCC) { $iscc = $env:ISCC }
 if (-not $iscc) {
     foreach ($candidate in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         "C:\Program Files\Inno Setup 6\ISCC.exe",
         "C:\Program Files (x86)\Inno Setup 5\ISCC.exe"
@@ -92,7 +93,10 @@ if (-not $iscc) {
         if (Test-Path $candidate) { $iscc = $candidate; break }
     }
 }
-if (-not $iscc) { $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source }
+if (-not $iscc) {
+    $isccCommand = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($isccCommand) { $iscc = $isccCommand.Source }
+}
 if (-not $iscc) {
     throw "Inno Setup compiler (ISCC.exe) not found; install Inno Setup 6 or pass -IsccPath. Refusing to emit a fake installer."
 }

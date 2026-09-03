@@ -69,7 +69,7 @@ fun PagerDashboard(
 ) {
     var expandedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
-    var autoRequestedSetup by rememberSaveable { mutableStateOf(false) }
+    var autoRequestedPairing by rememberSaveable { mutableStateOf(false) }
     var engineFilter by rememberSaveable { mutableStateOf(PagerEngineFilter.ALL) }
     val visibleTasks = remember(state.tasks, engineFilter) {
         state.tasks.forEngine(engineFilter)
@@ -81,15 +81,14 @@ fun PagerDashboard(
         if (visibleTasks.isNotEmpty()) listState.scrollToItem(0)
     }
 
-    // First-launch entry: once preferences have loaded with no server endpoint
-    // configured (the build ships no default), open the setup dialog once until
-    // the user saves an address. Guarded on preferencesLoaded so the placeholder
-    // state (endpoint == null before DataStore emits) cannot latch the dialog
-    // for a returning user who already has an endpoint configured.
+    // First launch goes straight to the camera. The normal path is one scan,
+    // never a server/IP/password form. If the user cancels or denies camera
+    // permission, the unpaired dashboard remains usable and exposes both the
+    // scan action and the manual-address recovery path in Settings.
     LaunchedEffect(state.endpoint, state.preferencesLoaded) {
-        if (state.preferencesLoaded && state.endpoint == null && !autoRequestedSetup) {
-            autoRequestedSetup = true
-            settingsOpen = true
+        if (state.preferencesLoaded && state.endpoint == null && !autoRequestedPairing) {
+            autoRequestedPairing = true
+            onScanPairing()
         }
     }
 
@@ -128,9 +127,11 @@ fun PagerDashboard(
             ConnectionBanner(state)
             if (state.tasks.isEmpty()) {
                 EmptyDashboard(
+                    paired = state.endpoint != null,
                     bridgeConnected = state.bridgeConnected,
                     onOpenChat = onOpenChat,
                     onRefresh = onRefresh,
+                    onScanPairing = onScanPairing,
                 )
             } else {
                 EngineSummary(
@@ -329,9 +330,11 @@ private fun ConnectionBanner(state: PagerUiState) {
 
 @Composable
 private fun EmptyDashboard(
+    paired: Boolean,
     bridgeConnected: Boolean,
     onOpenChat: () -> Unit,
     onRefresh: () -> Unit,
+    onScanPairing: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -344,20 +347,31 @@ private fun EmptyDashboard(
             )
             Spacer(Modifier.height(18.dp))
             Text(
-                if (bridgeConnected) "当前没有可显示的任务" else "请先在聊天页完成登录",
+                when {
+                    !paired -> "扫描电脑二维码即可连接"
+                    bridgeConnected -> "当前没有可显示的任务"
+                    else -> "正在恢复与电脑的连接"
+                },
                 style = MaterialTheme.typography.titleMedium,
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                if (bridgeConnected) "新建或恢复会话后，看板会自动更新。"
-                else "WebView 保持 cc-remote 的安全登录和连接状态。",
+                when {
+                    !paired -> "无需输入 IP 或密码；二维码会自动配置安全会话。"
+                    bridgeConnected -> "新建或恢复会话后，看板会自动更新。"
+                    else -> "已保存配对信息，正在自动重连。"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onOpenChat) { Text("打开聊天") }
-                OutlinedButton(onClick = onRefresh) { Text("重新同步") }
+            if (!paired) {
+                Button(onClick = onScanPairing) { Text("扫描配对二维码") }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onOpenChat) { Text("打开聊天") }
+                    OutlinedButton(onClick = onRefresh) { Text("重新同步") }
+                }
             }
         }
     }

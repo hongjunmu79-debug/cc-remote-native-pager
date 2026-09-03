@@ -102,6 +102,59 @@ New-Item -ItemType Directory -Force -Path (Join-Path $payload "bin") | Out-Null
 Copy-Item $uvExeFull (Join-Path $payload "bin\uv.exe") -Force
 Write-Step "Bundled uv $uvVersionText as payload\bin\uv.exe"
 
+# Bundle the pinned python-build-standalone runtime as well. Consumer machines
+# must not need system Python, and downloading a managed interpreter during an
+# Inno Setup child process is unreliable on Windows profiles backed by cloud
+# file-system filters (ERROR_UNTRUSTED_MOUNT_POINT / cross-volume rename).
+$pythonVersion = (Get-Content (Join-Path $sourceRoot "deploy\python-version.txt") | Select-Object -First 1).Trim()
+$managedPython = (& $uvExeFull python find --managed-python $pythonVersion 2>$null | Select-Object -First 1)
+if (-not $managedPython) {
+    & $uvExeFull python install $pythonVersion
+    if ($LASTEXITCODE -ne 0) { throw "uv could not install the pinned build-time Python $pythonVersion" }
+    $managedPython = (& $uvExeFull python find --managed-python $pythonVersion 2>$null | Select-Object -First 1)
+}
+if (-not $managedPython -or -not (Test-Path $managedPython)) {
+    throw "uv could not locate the pinned build-time Python $pythonVersion"
+}
+$managedPythonRoot = Split-Path ([System.IO.Path]::GetFullPath(([string]$managedPython).Trim())) -Parent
+$runtimePythonBuild = Join-Path $outputDir "runtime-python-build"
+$runtimeVenvBuild = Join-Path $outputDir "runtime-venv-build"
+foreach ($temporaryRuntime in @($runtimePythonBuild, $runtimeVenvBuild)) {
+    if (Test-Path $temporaryRuntime) {
+        Remove-Item -LiteralPath $temporaryRuntime -Recurse -Force -Confirm:$false
+    }
+}
+& $python (Join-Path $PSScriptRoot "win_manifest.py") --copy --source $managedPythonRoot --destination $runtimePythonBuild
+if ($LASTEXITCODE -ne 0) { throw "failed to clean-copy the build-time Python runtime" }
+$externallyManaged = Join-Path $runtimePythonBuild "Lib\EXTERNALLY-MANAGED"
+if (Test-Path $externallyManaged) {
+    Remove-Item -LiteralPath $externallyManaged -Force -Confirm:$false
+}
+& $uvExeFull pip install --python (Join-Path $runtimePythonBuild "python.exe") --system `
+    --requirement (Join-Path $payload "requirements.lock")
+if ($LASTEXITCODE -ne 0) { throw "failed to install locked dependencies into bundled Python" }
+& $uvExeFull --no-python-downloads venv $runtimeVenvBuild `
+    --python (Join-Path $runtimePythonBuild "python.exe") --system-site-packages
+if ($LASTEXITCODE -ne 0) { throw "failed to create the bundled runtime launcher" }
+
+$bundledPythonRoot = Join-Path $payload "runtime\python"
+& $python (Join-Path $PSScriptRoot "win_manifest.py") --copy --source $runtimePythonBuild --destination $bundledPythonRoot
+if ($LASTEXITCODE -ne 0) { throw "failed to clean-copy the bundled Python runtime" }
+if (-not (Test-Path (Join-Path $bundledPythonRoot "python.exe"))) {
+    throw "bundled Python payload is incomplete"
+}
+$bundledVenvRoot = Join-Path $payload "runtime\.venv"
+& $python (Join-Path $PSScriptRoot "win_manifest.py") --copy --source $runtimeVenvBuild --destination $bundledVenvRoot
+if ($LASTEXITCODE -ne 0) { throw "failed to clean-copy the bundled runtime template" }
+Remove-Item -LiteralPath $runtimePythonBuild -Recurse -Force -Confirm:$false
+Remove-Item -LiteralPath $runtimeVenvBuild -Recurse -Force -Confirm:$false
+$runtimeBundle = Join-Path $payload "runtime-bundle.zip"
+& $python (Join-Path $PSScriptRoot "win_build.py") --bundle-tree (Join-Path $payload "runtime") `
+    --output $runtimeBundle --source-date-epoch $SourceDateEpoch
+if ($LASTEXITCODE -ne 0) { throw "failed to assemble the deterministic runtime bundle" }
+Remove-Item -LiteralPath (Join-Path $payload "runtime") -Recurse -Force -Confirm:$false
+Write-Step "Bundled Python $pythonVersion and locked dependencies as runtime-bundle.zip"
+
 # --- Build the manifest and run the smoke suite ------------------------------
 & $python (Join-Path $PSScriptRoot "win_manifest.py") --build $payload --git-sha $GitSha --source-date-epoch $SourceDateEpoch
 if ($LASTEXITCODE -ne 0) { throw "distribution manifest build failed" }
