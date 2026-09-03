@@ -2,6 +2,27 @@
 
 [English](CHANGELOG.md)
 
+## v3.0.0-pager.7 — 2026-09-03
+
+在产品 v3.0.0 / wire protocol v19 上完成局域网零配置上手；不改变会话、引擎、
+路由或 wire protocol 核心行为。
+
+- Windows 安装器不再取系统返回的第一个 RFC1918 地址，而是优先选择拥有私有默认
+  网关的活动物理网卡，避免把 WSL/Hyper-V 虚拟地址写进手机二维码。
+- 同机 wrapper 固定通过 `127.0.0.1` 连接 relay；DHCP 或 Wi-Fi 地址变化不会再
+  破坏电脑内部控制链路。
+- 打开 Windows 控制台后自动生成一次性二维码；Android 首次安装直接进入扫码，
+  遇到无关二维码会继续扫描，手工地址/密码仅保留为故障恢复入口。
+- 修复 Windows 发布契约测试，避免把多余的 `\{` 写进真实 PowerShell 探针，恢复
+  CI 的 Windows 发布门禁。
+- Windows 安装器现在兼容 Windows PowerShell 5、无需预装 Python，并在真实配置
+  脚本失败时返回非零退出码；同时修复 PowerShell 5 将成功的网卡选择器报告为
+  `-1` 而错误回退到 `127.0.0.1` 的问题。
+- Windows 产物内置确定性的 Python 与锁定依赖运行时，首次安装无需下载 Python 或
+  包；运行时使用包内单一压缩层，避免 Inno Setup 逐个处理数千文件。
+- Android 发行版本更新为 `3.0.0-pager.7` / version code `30016`，同步补充“两份
+  文件下载、安装、扫码即连”的说明。
+
 ## v3.0.0-pager.5 — 2026-08-27
 
 面向原生 pager 发行线的生产发布加固，基于 cc-remote 产品 v3.0.0 / wire

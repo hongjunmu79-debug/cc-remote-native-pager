@@ -28,7 +28,7 @@ backward-compatible with upstream cc-remote:
   authentication, the WebSocket, and the chat surface; the native dashboard
   reads a versioned, exact-origin WebMessage bridge and never duplicates the
   session state machine. Package `dev.ccremote.lan`.
-- **Windows packaging** (`packaging/windows/`): a reproducible Windows
+- **Windows packaging** (`cc_portable_control/windows/`): a reproducible Windows
   installer and portable archive with first-run configuration, supervised
   scheduled tasks, and a LocalSubnet firewall rule. No Node LAN proxy and no
   machine-created `.venv` are shipped.

@@ -2,6 +2,33 @@
 
 [中文](CHANGELOG_zh.md)
 
+## v3.0.0-pager.7 — 2026-09-03
+
+Zero-configuration LAN onboarding on product v3.0.0 / wire protocol v19. No
+session, engine, routing, or wire-protocol behavior changed.
+
+- The Windows setup now ranks active physical/private default-gateway adapters
+  instead of accepting the first RFC1918 address, which could be a WSL or
+  Hyper-V switch. The phone QR therefore carries the reachable Wi-Fi/Ethernet
+  address on machines with virtual adapters.
+- The packaged local wrapper always connects to its co-located relay through
+  `127.0.0.1`; DHCP and Wi-Fi address changes no longer break the internal
+  wrapper/relay control link.
+- Opening the Windows console automatically creates the one-time QR. A fresh
+  Android install opens the scanner directly, keeps scanning past unrelated QR
+  codes, and presents manual address/password entry only as a recovery path.
+- Repair the Windows release-contract tests so the CI gate executes real
+  PowerShell blocks instead of writing stray `\{` escapes into probe scripts.
+- The Windows installer now supports Windows PowerShell 5 without a preinstalled
+  Python and returns a non-zero exit code when real setup fails. It also accepts
+  PowerShell 5's spurious `-1` native-pipeline status when the LAN selector
+  produced a valid address, avoiding an incorrect `127.0.0.1` fallback.
+- Windows artifacts carry a deterministic, ready-to-run Python/dependency
+  bundle. First install performs no Python or package download, and the nested
+  runtime archive avoids thousands of slow Inno Setup file operations.
+- Bump the Android distribution to version name `3.0.0-pager.7` / version code
+  `30016`, with matching two-download setup documentation.
+
 ## v3.0.0-pager.5 — 2026-08-27
 
 Production release hardening of the native-pager distribution on cc-remote

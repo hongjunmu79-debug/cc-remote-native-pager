@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Icon, ClaudeMark } from "../icons";
 import { useImeSubmit } from "../use-ime-submit";
@@ -62,7 +62,7 @@ export function LoginForm({
     }
   };
 
-  const startPairing = async () => {
+  const startPairing = useCallback(async () => {
     setError("");
     setLoading(true);
     try {
@@ -92,7 +92,18 @@ export function LoginForm({
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // The Windows shortcut deliberately opens a loopback console. Generate the
+    // one-time QR immediately so first-time setup is: install both apps, scan,
+    // connected. Remote browsers still see the explicit button because only a
+    // relay-local request may use the password-free bootstrap endpoint.
+    const host = window.location.hostname.toLowerCase();
+    if (host === "127.0.0.1" || host === "::1" || host === "localhost") {
+      void startPairing();
+    }
+  }, [startPairing]);
   const imeSubmit = useImeSubmit<HTMLInputElement>((value) => { void submit(value); });
   const passwordInputRef = imeSubmit.inputRef;
 

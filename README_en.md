@@ -4,7 +4,7 @@
 
 Self-hosted · Dual-engine · Multi-session · Live process · Responsive Web
 
-**Current release: v3.0.0** · Distribution `3.0.0-pager.5` · Wire protocol v19
+**Current release: v3.0.0** · Distribution `3.0.0-pager.7` · Wire protocol v19
 
 [中文](README.md) ·
 [Journey 1: Windows + Android on a LAN](#journey-1-windows--android-on-a-trusted-lan) ·
@@ -106,6 +106,13 @@ phone** on the same LAN runs the native pager (`dev.ccremote.lan`) or the
 responsive web client. No public VPS, no domain, no TLS needed — traffic stays
 inside your LAN.
 
+For a normal install, download exactly two files from
+[GitHub Releases](https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases):
+the Windows `*-windows-x64-setup.exe` and Android `app-release.apk`. Double-click
+the Windows installer, open the Android app, and scan. No password, IP address,
+Python, Node, ADB, or command line is required; manual address/password fields
+remain recovery-only fallbacks.
+
 ```
 Android pager / phone browser ──http://<windows-lan-ip>:8765──▶ Windows relay+wrapper
                                                                   └─ drives local claude / codex
@@ -152,12 +159,12 @@ The installer:
   uninstall/rollback without touching Claude/Codex sessions or credentials.
 
 Unattended/silent installs are supported by passing a config file. See
-[packaging/windows/README.md](packaging/windows/README.md).
+[cc_portable_control/windows/README.md](cc_portable_control/windows/README.md).
 
 ### 2) Display the client pairing QR
 
-The installer opens the local console. Choose **Display pairing QR**. The QR is
-short-lived, single-use, and scoped to the selected machine and new client.
+The installer opens the local console and generates the QR automatically. The
+QR is short-lived, single-use, and scoped to the selected machine and new client.
 
 ```bash
 curl http://<windows-lan-ip>:8765/healthz
@@ -166,9 +173,8 @@ curl http://<windows-lan-ip>:8765/healthz
 
 ### 3) Install and open the Android pager
 
-1. Build or download the Android APK (see the Android notes below), install it,
-   and launch.
-2. Tap **Scan** and scan the QR shown by the Windows console.
+1. Download and install `app-release.apk` from the same GitHub Release.
+2. First launch opens the scanner directly; point it at the Windows console QR.
 3. The app validates and saves the relay origin, redeems the HttpOnly session,
    and enters directly. Manual origin/password entry remains a fallback.
 4. The WebView owns login/WebSocket/chat; the native dashboard projects the
@@ -244,7 +250,7 @@ Confirm the version and release attestation on GitHub, then download
 `install.sh` and `SHA256SUMS` from the same release:
 
 ```bash
-release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.5
+release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.7
 curl -fLO "$release/install.sh"
 curl -fLO "$release/SHA256SUMS"
 
@@ -560,7 +566,7 @@ cc_remote/
   wrapper/         # Claude SDK + Codex app-server / pool / stream / ringbuffer / transport
 web/               # React client (Vite + TS)
 android-native/    # Jetpack Compose pager + WebView shell
-packaging/windows/ # reproducible Windows installer + portable archive
+cc_portable_control/windows/ # reproducible Windows installer + portable archive
 tests/             # zero-token unit tests + e2e scripts
 deploy/            # release metadata, Caddyfile / systemd / setup-vps.sh / env examples
 ```

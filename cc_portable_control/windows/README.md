@@ -40,10 +40,13 @@ byte-identical zip.
 ## How a user installs
 
 ```powershell
-Expand-Archive cc-remote-v3.0.0-pager.5-windows-x64.zip
-cd cc-remote-v3.0.0-pager.5-windows-x64
-.\setup.ps1 -Unattended -LoginPassword "a-strong-16-char-password" `
-    -MachineName desktop-1 -PublicOrigin http://192.168.1.50:8765
+# Recommended: download and double-click the setup.exe from GitHub Releases.
+# It includes pinned Python and dependencies; no system Python or package
+# download is required during first install.
+# Archive fallback (also zero-config):
+Expand-Archive cc-remote-v3.0.0-pager.7-windows-x64.zip
+cd cc-remote-v3.0.0-pager.7-windows-x64
+.\setup.ps1 -Unattended -AllowInsecureHttp
 ```
 
 The installer:
@@ -65,6 +68,11 @@ The compiled `...-windows-x64-setup.exe` supplies safe unattended defaults,
 creates Start Menu/Desktop **cc-remote 控制台** shortcuts, and opens the
 console after install. `LOGIN_PASSWORD` is optional; set it only when a password
 fallback is desired in addition to QR pairing.
+
+The first-run selector follows the active private default-gateway adapter
+instead of the first RFC1918 address returned by Windows, so WSL/Hyper-V and VPN
+interfaces do not leak into the phone QR. The local wrapper always connects to
+the relay over `127.0.0.1`; only the QR uses the selected LAN address.
 
 `-NoServices` performs a portable-style install (release + config + venv, no
 tasks, no firewall); `start.ps1` then runs the processes in the foreground.

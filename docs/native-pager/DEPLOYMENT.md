@@ -3,7 +3,7 @@
 ## Release inputs
 
 - Android application ID: `dev.ccremote.lan`
-- Distribution version: `3.0.0-pager.5` (version code `30014`)
+- Distribution version: `3.0.0-pager.7` (version code `30016`)
 - cc-remote product version: `3.0.0`
 - cc-remote protocol: `19`
 - Native bridge: `1`
@@ -61,7 +61,7 @@ Install with Android's package installer, or with ADB when the device is
 connected:
 
 ```powershell
-adb install -r CC-Remote-Native-Pager-v3.0.0-pager.5.apk
+adb install -r app-release.apk
 ```
 
 ## Rollback

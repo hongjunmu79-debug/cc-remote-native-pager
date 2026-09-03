@@ -88,6 +88,23 @@ Set-StrictMode -Version 2.0
 
 function Write-Step { param([string]$Message) Write-Host "[cc-remote] $Message" -ForegroundColor Cyan }
 function Invoke-Check { param([string]$Message) Write-Host "[cc-remote] $Message" }
+function Get-CommandSource {
+    param([string]$Name)
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    return $null
+}
+function Get-Sha256 {
+    param([string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+        $stream.Dispose()
+    }
+}
 
 if (-not $InstallRoot) { $InstallRoot = Join-Path $env:LOCALAPPDATA "cc-remote" }
 $payload = [System.IO.Path]::GetFullPath($Payload).TrimEnd('\')
@@ -111,26 +128,93 @@ foreach ($dir in @($configDir, $logsDir, $stateDir, $releasesDir, $runtimeDir)) 
 # --- Resolve uv and a python for the smoke suite ----------------------------
 $uvExe = Join-Path $payload "bin\uv.exe"
 if (-not (Test-Path $uvExe)) {
-    $uvExe = (Get-Command uv -ErrorAction SilentlyContinue).Source
+    $uvExe = Get-CommandSource "uv"
 }
 if (-not $uvExe) { throw "bundled uv.exe missing in payload and no uv on PATH" }
 
+# Keep managed Python inside this cc-remote installation. Besides making the
+# runtime self-contained, this avoids Windows error 448 when a user's roaming
+# profile is backed by a cloud-files mount that uv refuses to traverse.
+$env:UV_DATA_DIR = Join-Path $runtimeDir "uv-data"
+$env:UV_CACHE_DIR = Join-Path $runtimeDir "uv-cache"
+$env:UV_PYTHON_INSTALL_DIR = Join-Path $runtimeDir "python"
+$env:UV_PYTHON_BIN_DIR = Join-Path $runtimeDir "python-bin"
+$env:UV_PYTHON_NO_REGISTRY = "1"
+$env:UV_LINK_MODE = "copy"
+
 $pythonVersion = (Get-Content (Join-Path $payload "deploy\python-version.txt") -ErrorAction Stop | Select-Object -First 1).Trim()
+$runtimeBundle = Join-Path $payload "runtime-bundle.zip"
+$bundledPython = Join-Path $payload "runtime\python\python.exe"
+$bundledVenv = Join-Path $payload "runtime\.venv"
+
+function Set-VenvHome {
+    param([string]$VenvRoot, [string]$PythonHome)
+    $configPath = Join-Path $VenvRoot "pyvenv.cfg"
+    if (-not (Test-Path $configPath)) { throw "prepared runtime has no pyvenv.cfg" }
+    $content = [System.IO.File]::ReadAllText($configPath)
+    $content = [regex]::Replace($content, '(?m)^home\s*=.*$', "home = $PythonHome")
+    [System.IO.File]::WriteAllText(
+        $configPath,
+        $content,
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+}
+
+$bootstrapRuntime = $null
+$bootstrapPython = $null
+if ((-not (Test-Path $venvPython)) -and (Test-Path $runtimeBundle)) {
+    # A fresh machine may not have Python. Verify the bundled runtime against
+    # the payload manifest before executing it, then use a temporary extraction
+    # for the full smoke gate. The permanent runtime is installed only after
+    # every payload file has passed verification.
+    $bootstrapManifestPath = Join-Path $payload "distribution-manifest.json"
+    if (-not (Test-Path $bootstrapManifestPath)) {
+        throw "distribution-manifest.json is missing"
+    }
+    $bootstrapManifest = Get-Content $bootstrapManifestPath -Raw | ConvertFrom-Json
+    $expectedRuntimeHash = [string]$bootstrapManifest.files.'runtime-bundle.zip'
+    if ($expectedRuntimeHash -notmatch '^[0-9a-f]{64}$') {
+        throw "runtime-bundle.zip has no valid manifest hash"
+    }
+    $actualRuntimeHash = Get-Sha256 $runtimeBundle
+    if ($actualRuntimeHash -ne $expectedRuntimeHash) {
+        throw "runtime-bundle.zip failed manifest verification"
+    }
+    $bootstrapRuntime = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-remote-bootstrap-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Expand-Archive -LiteralPath $runtimeBundle -DestinationPath $bootstrapRuntime -Force
+        $bootstrapPython = Join-Path $bootstrapRuntime "python\python.exe"
+        if (-not (Test-Path $bootstrapPython)) {
+            throw "runtime-bundle.zip has no bundled Python"
+        }
+    } catch {
+        if (Test-Path $bootstrapRuntime) {
+            Remove-Item -LiteralPath $bootstrapRuntime -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+}
 
 function Invoke-HostPython {
     # Prefer the runtime venv; fall back to any system python for the smoke
     # suite (pure stdlib, so any Python 3.9+ works for verification).
     param([string[]]$Arguments)
     if (Test-Path $venvPython) {
-        & $venvPython @Arguments 2>&1
+        & $venvPython @Arguments | Out-Host
         return $LASTEXITCODE
     }
-    foreach ($candidate in @((Get-Command py -ErrorAction SilentlyContinue).Source, (Get-Command python -ErrorAction SilentlyContinue).Source)) {
+    if ($bootstrapPython -and (Test-Path $bootstrapPython)) {
+        & $bootstrapPython @Arguments | Out-Host
+        return $LASTEXITCODE
+    }
+    foreach ($candidate in @((Get-CommandSource "py"), (Get-CommandSource "python"))) {
         if (-not $candidate) { continue }
-        & $candidate @Arguments 2>&1
+        & $candidate @Arguments | Out-Host
         if ($LASTEXITCODE -eq 0) { return 0 }
     }
-    return 1
+    # Backward-compatible fallback for older archives without runtime-bundle.
+    & $uvExe run --no-project --python $pythonVersion -- python @Arguments | Out-Host
+    return $LASTEXITCODE
 }
 
 # --- 1. Verify the payload before touching the target -----------------------
@@ -139,6 +223,9 @@ $smoke = Join-Path $PSScriptRoot "win_smoke.py"
 if (-not (Test-Path $smoke)) { throw "win_smoke.py not found next to install.ps1" }
 $verifyArgs = @($smoke, "--check", $payload)
 $verifyCode = Invoke-HostPython $verifyArgs
+if ($bootstrapRuntime -and (Test-Path $bootstrapRuntime)) {
+    Remove-Item -LiteralPath $bootstrapRuntime -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
+}
 if ($verifyCode -ne 0) {
     throw "payload verification failed; refusing to install (see errors above)"
 }
@@ -148,15 +235,32 @@ Write-Step "Payload verified: cc-remote v$($manifest.product_version) (protocol 
 
 # --- 2. Bootstrap / re-sync the runtime venv --------------------------------
 Write-Step "Bootstrapping runtime venv with uv $($uvExe)"
-& $uvExe python install $pythonVersion 2>&1 | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "uv python install failed for $pythonVersion" }
-
+$usedBundledVenv = $false
 if (-not (Test-Path $venvPython)) {
-    & $uvExe venv $venvDir --python $pythonVersion 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "uv venv creation failed" }
+    if (Test-Path $runtimeBundle) {
+        Expand-Archive -LiteralPath $runtimeBundle -DestinationPath $runtimeDir -Force
+        $bundledPython = Join-Path $runtimeDir "python\python.exe"
+        $bundledVenv = $venvDir
+    }
+    if ((Test-Path $bundledPython) -and (Test-Path (Join-Path $bundledVenv "Scripts\python.exe"))) {
+        if ([System.IO.Path]::GetFullPath($bundledVenv) -ne [System.IO.Path]::GetFullPath($venvDir)) {
+            New-Item -ItemType Directory -Force -Path $venvDir | Out-Null
+            Get-ChildItem -LiteralPath $bundledVenv -Force |
+                Copy-Item -Destination $venvDir -Recurse -Force
+        }
+        Set-VenvHome -VenvRoot $venvDir -PythonHome (Split-Path $bundledPython -Parent)
+        $usedBundledVenv = $true
+    } else {
+        # Backward-compatible fallback for older archives. Current releases
+        # always bundle the interpreter and never take this download path.
+        & $uvExe venv $venvDir --python $pythonVersion
+        if ($LASTEXITCODE -ne 0) { throw "uv venv creation failed" }
+    }
 }
-& $uvExe pip install --python $venvPython --requirement (Join-Path $payload "requirements.lock") 2>&1 | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "uv pip install failed" }
+if (-not $usedBundledVenv) {
+    & $uvExe pip install --python $venvPython --requirement (Join-Path $payload "requirements.lock")
+    if ($LASTEXITCODE -ne 0) { throw "uv pip install failed" }
+}
 
 # --- 3. Copy the payload into an immutable release and switch current -------
 Write-Step "Installing release $distributionVersion"
@@ -164,7 +268,7 @@ $releaseDir = Join-Path $releasesDir $distributionVersion
 if (Test-Path $releaseDir) {
     Remove-Item -Recurse -Force -Confirm:$false $releaseDir
 }
-& $venvPython (Join-Path $PSScriptRoot "win_manifest.py") --copy --source $payload --destination $releaseDir 2>&1 | Out-Host
+& $venvPython (Join-Path $PSScriptRoot "win_manifest.py") --copy --source $payload --destination $releaseDir
 if ($LASTEXITCODE -ne 0) { throw "failed to stage release into $releaseDir" }
 
 # Record previous release for rollback, then switch the current junction.

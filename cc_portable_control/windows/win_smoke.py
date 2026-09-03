@@ -60,7 +60,11 @@ def _path_is_within(path: Path, marker: str) -> bool:
     """True when [path] is AT or UNDER [marker] (segment-wise, separator/case blind)."""
     base = _normalize_path_text(marker)
     target = _normalize_path_text(str(path))
-    return bool(base) and (target == base or target.startswith(base + "/"))
+    candidates = (target, target[2:]) if len(target) >= 3 and target[1:3] == ":/" else (target,)
+    return bool(base) and any(
+        candidate == base or candidate.startswith(base + "/")
+        for candidate in candidates
+    )
 
 
 def load_distribution_info(dist_root: Path) -> DistributionInfo:

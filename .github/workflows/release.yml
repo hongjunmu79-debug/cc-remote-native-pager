@@ -2,12 +2,12 @@ name: Release
 
 on:
   push:
-    # Only pre-release-shaped tags (v3.0.0-pager.5) trigger the workflow at
+    # Only pre-release-shaped tags (v3.0.0-pager.7) trigger the workflow at
     # all. The bare product tag (v3.0.0) must never become a release, so it is
     # not even a trigger pattern; the verify job then enforces the exact
     # canonical distribution tag from deploy/release-metadata.json.
     tags:
-      - "v*.*.*-*"   # distribution tags such as v3.0.0-pager.5
+      - "v*.*.*-*"   # distribution tags such as v3.0.0-pager.7
   # Safe validation path: a maintainer may trigger verify + every build gate
   # without publishing. Publication stays tag-only; the build jobs skip the
   # fail-closed signing check and the verify job skips the tag-contract check

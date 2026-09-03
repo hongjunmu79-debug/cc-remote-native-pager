@@ -88,7 +88,7 @@ def _write_zip(
         for tree, prefix, mode in trees:
             for path in sorted(tree.rglob("*")):
                 relative = path.relative_to(tree).as_posix()
-                arcname = f"{prefix}/{relative}"
+                arcname = f"{prefix}/{relative}" if prefix else relative
                 if path.is_dir():
                     archive.writestr(_zip_info(arcname + "/", mode=0o755), b"")
                 elif path.is_file():
@@ -97,6 +97,27 @@ def _write_zip(
                 else:
                     raise BuildError(f"unsupported entry in {tree}: {path}")
     return file_count
+
+
+def build_tree_archive(*, source: Path, output_path: Path, source_date_epoch: int = 0) -> int:
+    """Pack one tree into a deterministic zip without adding a root prefix."""
+    source = source.resolve()
+    if not source.is_dir():
+        raise BuildError(f"bundle source directory is missing: {source}")
+    output_path = output_path.resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output_path.with_name(f".{output_path.name}.tmp")
+    completed = False
+    try:
+        file_count = _write_zip(temporary, [], [(source, "", 0o644)])
+        if source_date_epoch > 0:
+            os.utime(temporary, (source_date_epoch, source_date_epoch))
+        temporary.replace(output_path)
+        completed = True
+        return file_count
+    finally:
+        if not completed and temporary.exists():
+            temporary.unlink(missing_ok=True)
 
 
 def build_release_archive(
@@ -236,14 +257,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--setup", type=Path, default=None, help="setup.ps1 to embed at the archive root (installer archive)")
     parser.add_argument("--start-portable", type=Path, default=None, help="start-portable.ps1 to embed at the archive root (portable archive)")
     parser.add_argument("--readme", type=Path, default=None, help="README-portable.txt to embed at the archive root (portable archive)")
-    parser.add_argument("--packaging", type=Path, required=True, help="cc_portable_control/windows directory (scripts)")
+    parser.add_argument("--packaging", type=Path, default=None, help="cc_portable_control/windows directory (scripts)")
     parser.add_argument("--packaging-init", type=Path, default=None, help="cc_portable_control/__init__.py of the source tree")
-    parser.add_argument("--payload", type=Path, required=True, help="built payload tree")
+    parser.add_argument("--payload", type=Path, default=None, help="built payload tree")
     parser.add_argument("--output", type=Path, required=True, help="output zip path")
+    parser.add_argument("--bundle-tree", type=Path, default=None, help="write one deterministic prefix-free tree zip and exit")
     parser.add_argument("--portable", action="store_true", help="assemble the portable archive instead of the installer archive")
     parser.add_argument("--source-date-epoch", type=int, default=0)
     parser.add_argument("--git-sha", default="")
     args = parser.parse_args(argv)
+
+    if args.bundle_tree is not None:
+        file_count = build_tree_archive(
+            source=args.bundle_tree,
+            output_path=args.output,
+            source_date_epoch=args.source_date_epoch,
+        )
+        print(f"{args.output.resolve()} ({file_count} files)")
+        return 0
+    if args.payload is None or args.packaging is None:
+        parser.error("release archive mode requires --payload and --packaging")
 
     metadata = json.loads(
         (args.payload / "deploy" / "release-metadata.json").read_text(encoding="utf-8")
