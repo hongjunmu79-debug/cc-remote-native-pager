@@ -4,7 +4,7 @@
 
 Self-hosted · Dual-engine · Multi-session · Live process · Responsive Web
 
-**Current release: v3.0.0** · Distribution `3.0.0-pager.13` · Wire protocol v19
+**Current release: v3.0.0** · Distribution `3.0.0-pager.14` · Wire protocol v19
 
 [中文](README.md) ·
 [Journey 1: Windows + Android on a LAN](#journey-1-windows--android-on-a-trusted-lan) ·
@@ -250,7 +250,7 @@ Confirm the version and release attestation on GitHub, then download
 `install.sh` and `SHA256SUMS` from the same release:
 
 ```bash
-release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.13
+release=https://github.com/hongjunmu79-debug/cc-remote-native-pager/releases/download/v3.0.0-pager.14
 curl -fLO "$release/install.sh"
 curl -fLO "$release/SHA256SUMS"
 

@@ -314,6 +314,11 @@ jobs:
             Write-Host "Verified $($zip.Name) (smoke + tree check passed)"
           }
           Write-Host "Built $($zips[0].Name), $($zips[1].Name), and $($exe.Name)"
+      - name: Verify installed lifecycle and config-preserving uninstall
+        shell: powershell
+        run: |
+          & cc_portable_control\windows\smoke-install.ps1 -StageDir (Join-Path $pwd 'dist\stage') -TestDirectory (Join-Path $env:RUNNER_TEMP ('cc-remote-lifecycle-' + [guid]::NewGuid().ToString('N')))
+          if ($LASTEXITCODE -ne 0) { throw 'installed lifecycle failed' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-dist

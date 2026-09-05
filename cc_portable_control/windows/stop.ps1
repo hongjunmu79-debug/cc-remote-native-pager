@@ -34,7 +34,7 @@ foreach ($service in @("relay", "wrapper")) {
 }
 
 foreach ($taskName in @("cc-remote-relay", "cc-remote-wrapper")) {
-    $task = Get-ScheduledTask -TaskName $taskName
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($task -and (($task.Actions.Arguments -join ' ').Contains('"' + $InstallRoot.TrimEnd('\') + '"'))) {
         Stop-ScheduledTask -TaskName $taskName
         Disable-ScheduledTask -TaskName $taskName
