@@ -20,10 +20,10 @@ from cc_portable_control.windows import win_build, win_config, win_layout, win_m
 METADATA = {
     "schema": 1,
     "product_version": "3.0.0",
-    "distribution_version": "3.0.0-pager.15",
+    "distribution_version": "3.0.0-pager.16",
     "protocol": 19,
     "repository": {"owner": "hongjunmu79-debug", "name": "cc-remote-native-pager"},
-    "android": {"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.15", "version_code": 30024},
+    "android": {"application_id": "dev.ccremote.lan", "version_name": "3.0.0-pager.16", "version_code": 30025},
 }
 
 
@@ -520,7 +520,7 @@ def test_build_manifest_and_verify_round_trip(tmp_path: Path):
     make_distribution(tmp_path, git_sha="a" * 40)
     assert win_manifest.verify_distribution(tmp_path) == []
     manifest = win_manifest.read_manifest(tmp_path)
-    assert manifest["distribution_version"] == "3.0.0-pager.15"
+    assert manifest["distribution_version"] == "3.0.0-pager.16"
     assert manifest["protocol"] == 19
     assert manifest["git_sha"] == "a" * 40
     assert "cc_remote/__init__.py" in manifest["files"]
@@ -877,7 +877,7 @@ def _render_with_origin(smoke_module, origin: str):
 # ---------------------------------------------------------------------------
 
 
-def _stage_and_build_archive(tmp_path: Path, epoch: int, name: str = "cc-remote-v3.0.0-pager.15-windows-x64.zip") -> tuple[Path, win_build.ReleaseArchive]:
+def _stage_and_build_archive(tmp_path: Path, epoch: int, name: str = "cc-remote-v3.0.0-pager.16-windows-x64.zip") -> tuple[Path, win_build.ReleaseArchive]:
     # Each call gets an isolated source+payload so a build never inherits a
     # previous call's distribution-manifest.json/SHA256SUMS — the same
     # guarantee build.ps1 gives by removing its staging root between runs.
@@ -910,7 +910,7 @@ def test_build_release_archive_is_deterministic(tmp_path: Path):
     _, first = _stage_and_build_archive(tmp_path, 0, name="a.zip")
     _, second = _stage_and_build_archive(tmp_path, 0, name="b.zip")
     assert first.path.read_bytes() == second.path.read_bytes()
-    assert first.distribution_version == "3.0.0-pager.15"
+    assert first.distribution_version == "3.0.0-pager.16"
     assert first.protocol == 19
     assert first.path.suffix == ".zip"
 
@@ -1083,7 +1083,7 @@ def test_payload_never_contains_the_packaging_package():
 def _stage_and_build_portable_archive(
     tmp_path: Path,
     epoch: int,
-    name: str = "cc-remote-v3.0.0-pager.15-windows-x64-portable.zip",
+    name: str = "cc-remote-v3.0.0-pager.16-windows-x64-portable.zip",
 ) -> tuple[Path, win_build.ReleaseArchive]:
     stem = Path(name).stem
     source = tmp_path / f"source-{stem}"
@@ -1137,11 +1137,11 @@ def test_portable_archive_is_deterministic_and_named_from_metadata(tmp_path: Pat
     _, second = _stage_and_build_portable_archive(tmp_path, 0, name="b.zip")
     assert first.path.read_bytes() == second.path.read_bytes()
     # The archive carries the canonical version values from release-metadata.json.
-    assert first.distribution_version == "3.0.0-pager.15"
+    assert first.distribution_version == "3.0.0-pager.16"
     assert first.product_version == "3.0.0"
     # build.ps1 derives the artifact name from distribution_version.
     default = _stage_and_build_portable_archive(tmp_path, 0)
-    assert default[1].path.name == "cc-remote-v3.0.0-pager.15-windows-x64-portable.zip"
+    assert default[1].path.name == "cc-remote-v3.0.0-pager.16-windows-x64-portable.zip"
 
 
 def test_portable_archive_requires_start_portable(tmp_path: Path):
@@ -1282,6 +1282,8 @@ def test_windows_console_shortcut_uses_loopback_without_url_credentials():
     firewall = _repo_packaging_script("firewall.ps1")
     assert "-Verb RunAs" in firewall
     assert "-RemoteAddress LocalSubnet" in firewall
+    assert 'runtime\\python\\python.exe' in firewall
+    assert 'runtime\\python\\python.exe' in _repo_packaging_script("stop.ps1")
 
 
 def test_installer_registers_working_uninstall_and_offline_console():
@@ -1417,13 +1419,13 @@ def test_build_ps1_archive_loop_uses_split_path_leaf_under_strict_mode():
             "Set-StrictMode -Version 2.0;"
             "$ErrorActionPreference = 'Stop';"
             "$paths = @("
-            "'C:\\out\\cc-remote-v3.0.0-pager.15-windows-x64.zip', "
-            "'C:\\out\\cc-remote-v3.0.0-pager.15-windows-x64-portable.zip');"
+            "'C:\\out\\cc-remote-v3.0.0-pager.16-windows-x64.zip', "
+            "'C:\\out\\cc-remote-v3.0.0-pager.16-windows-x64-portable.zip');"
             "$leaves = foreach ($p in $paths) { Split-Path -Leaf $p };"
-            "if ($leaves[0] -ne 'cc-remote-v3.0.0-pager.15-windows-x64.zip') "
+            "if ($leaves[0] -ne 'cc-remote-v3.0.0-pager.16-windows-x64.zip') "
             "{ throw 'leaf0 mismatch' };"
             "if ($leaves[1] -ne "
-            "'cc-remote-v3.0.0-pager.15-windows-x64-portable.zip') "
+            "'cc-remote-v3.0.0-pager.16-windows-x64-portable.zip') "
             "{ throw 'leaf1 mismatch' };"
             "Write-Output 'strict-mode split-path ok'",
         ],
@@ -1518,10 +1520,10 @@ function Invoke-ArchiveAssembly {
 }
 
 $installerArchivePath = Invoke-ArchiveAssembly `
-    -Name 'cc-remote-v3.0.0-pager.15-windows-x64.zip' `
+    -Name 'cc-remote-v3.0.0-pager.16-windows-x64.zip' `
     -ExtraArgs @('--setup', $Setup)
 $portableArchivePath = Invoke-ArchiveAssembly `
-    -Name 'cc-remote-v3.0.0-pager.15-windows-x64-portable.zip' `
+    -Name 'cc-remote-v3.0.0-pager.16-windows-x64-portable.zip' `
     -ExtraArgs @('--portable', '--start-portable', $StartPortable, '--readme', $Readme)
 
 if (@($installerArchivePath).Count -ne 1) { throw "installer path is not a scalar (stdout leaked)" }
@@ -1595,8 +1597,8 @@ def test_build_ps1_archive_loop_captures_stdout_and_writes_real_sidecars(tmp_pat
     assert "archive-loop ok" in proc.stdout
     zips = sorted(p.name for p in output_dir.glob("*.zip"))
     assert zips == [
-        "cc-remote-v3.0.0-pager.15-windows-x64-portable.zip",
-        "cc-remote-v3.0.0-pager.15-windows-x64.zip",
+        "cc-remote-v3.0.0-pager.16-windows-x64-portable.zip",
+        "cc-remote-v3.0.0-pager.16-windows-x64.zip",
     ]
     for zip_name in zips:
         sidecar = output_dir / f"{zip_name}.sha256"

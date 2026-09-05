@@ -44,10 +44,12 @@ foreach ($taskName in @("cc-remote-relay", "cc-remote-wrapper")) {
 
 # Stop any portable foreground processes that use this install's venv.
 $venvRoot = Join-Path $InstallRoot "runtime\.venv\"
+$runtimeExe = Join-Path $InstallRoot "runtime\python\python.exe"
 $stopped = @()
 Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | ForEach-Object {
     $cmdline = $_.CommandLine
-    if ($cmdline -and $cmdline.Contains($venvRoot)) {
+    if ($cmdline -and ($cmdline.Contains($venvRoot) -or
+        ($_.ExecutablePath -eq $runtimeExe -and $cmdline -match '-m\s+cc_remote\.(relay|wrapper)(\s|$)'))) {
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         $stopped += $_.ProcessId
     }

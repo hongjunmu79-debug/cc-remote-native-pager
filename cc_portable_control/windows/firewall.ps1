@@ -55,12 +55,14 @@ if (-not $isAdministrator) {
 }
 
 $ruleName = "cc-remote-$Port"
-$pythonPath = Join-Path $InstallRoot "runtime\.venv\Scripts\python.exe"
+$launcherPath = Join-Path $InstallRoot "runtime\.venv\Scripts\python.exe"
+$pythonPath = Join-Path $InstallRoot "runtime\python\python.exe"
+if (-not (Test-Path -LiteralPath $pythonPath)) { $pythonPath = $launcherPath }
 
 if ($Remove) {
     $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     if ($existing) {
-        $owned = $existing | Get-NetFirewallApplicationFilter | Where-Object { $_.Program -eq $pythonPath }
+        $owned = $existing | Get-NetFirewallApplicationFilter | Where-Object { $_.Program -in @($pythonPath, $launcherPath) }
         if ($owned) { Remove-NetFirewallRule -DisplayName $ruleName }
         Write-Host "[cc-remote] removed firewall rule $ruleName"
     } else {

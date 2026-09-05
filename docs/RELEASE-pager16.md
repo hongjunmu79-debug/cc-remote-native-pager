@@ -1,4 +1,4 @@
-# 3.0.0-pager.15
+# 3.0.0-pager.16
 
 Windows now opens a persistent desktop control window. It shows service and
 client status, launches a dedicated QR page, and offers start/restart, network
