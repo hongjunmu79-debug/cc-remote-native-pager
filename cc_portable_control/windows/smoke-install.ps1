@@ -20,7 +20,7 @@ function Run-AndCheck([string]$Exe, [string[]]$Arguments) {
 Run-AndCheck (Join-Path $testRoot 'smoke-setup.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR="' + $install + '"'))
 $config = Join-Path $install 'config\.env'
 $configHash = (Get-FileHash -LiteralPath $config).Hash
-& (Join-Path $install 'runtime\.venv\Scripts\python.exe') -c 'from cc_remote.relay.server import create_app; from cc_remote.wrapper.machine import WrapperMachine; print("installed imports passed")'
+& (Join-Path $install 'runtime\.venv\Scripts\python.exe') -c 'from cc_remote.relay.server import create_app; from cc_remote.wrapper.machine import WrapperMachine; print(1)'
 if ($LASTEXITCODE -ne 0) { throw 'installed runtime import failed' }
 $registered = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.InstallLocation -and $_.InstallLocation.TrimEnd('\') -eq $install })
 if (-not $registered) { throw 'not registered in Installed Apps' }
