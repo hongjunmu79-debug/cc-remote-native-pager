@@ -49,7 +49,7 @@ if (-not (Test-Path $venvPython)) { throw "runtime venv not found: $venvPython (
 if (-not (Test-Path $configPath)) { throw "config not found: $configPath (run install.ps1 first)" }
 
 # Load the environment the same way the supervisor does.
-foreach ($line in (Get-Content $configPath -ErrorAction SilentlyContinue)) {
+foreach ($line in (Get-Content $configPath -Encoding UTF8 -ErrorAction SilentlyContinue)) {
     if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
         $key = $matches[1]
         $value = $matches[2].Trim().Trim('"').Trim("'")

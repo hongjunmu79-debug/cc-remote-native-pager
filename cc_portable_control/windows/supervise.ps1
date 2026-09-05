@@ -60,7 +60,7 @@ New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 # Apply config values to this process's environment so the relay/wrapper read
 # the same settings as a foreground run. python-dotenv quoting is handled by
 # stripping one level of surrounding quotes.
-foreach ($line in (Get-Content $configPath -ErrorAction SilentlyContinue)) {
+foreach ($line in (Get-Content $configPath -Encoding UTF8 -ErrorAction SilentlyContinue)) {
     if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
         $key = $matches[1]
         $value = $matches[2].Trim().Trim('"').Trim("'")

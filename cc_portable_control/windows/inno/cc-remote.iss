@@ -103,6 +103,7 @@ var
   ResultCode: Integer;
   PowerShell: String;
   Parameters: String;
+  ExtraArgs: String;
 begin
   if CurStep <> ssPostInstall then
     exit;
@@ -115,11 +116,14 @@ begin
     still returns overall success, leaving users with an extracted shell and
     no configured app. }
   PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  ExtraArgs := '';
+  if ExpandConstant('{param:NoFirewall|0}') = '1' then
+    ExtraArgs := ' -NoFirewall';
   Parameters := ExpandConstant(
     '-NoProfile -ExecutionPolicy Bypass -Command "' +
     'Start-Transcript -Path ''{app}\installer-setup.log'' -Force | Out-Null; ' +
-    '& ''{app}\release\setup.ps1'' -InstallRoot ''{app}'' {#SetupArgs}"'
-  );
+    '& ''{app}\release\setup.ps1'' -InstallRoot ''{app}'' {#SetupArgs}'
+  ) + ExtraArgs + '"';
   if not Exec(
     PowerShell,
     Parameters,

@@ -1,4 +1,4 @@
-# 3.0.0-pager.16
+# 3.0.0-pager.17
 
 Windows now opens a persistent desktop control window. It shows service and
 client status, launches a dedicated QR page, and offers start/restart, network
@@ -20,6 +20,9 @@ picker as well as from the camera.
 Services can run on battery. Supervised Python stderr no longer terminates the
 PowerShell 5.1 supervisor. Installation paths containing Chinese characters use
 a UTF-8 Python package path.
+PowerShell startup also reads configuration as UTF-8, keeping the Web UI
+reachable when the installation path contains Chinese characters. Automated
+installations with an already-managed firewall may use /NoFirewall=1.
 
 Network requirements remain: the phone must be able to reach the Windows
 guest/host on the LAN. Guest Wi-Fi isolation, virtual-machine NAT, or denied
