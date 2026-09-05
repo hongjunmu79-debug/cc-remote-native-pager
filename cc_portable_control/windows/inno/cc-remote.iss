@@ -39,8 +39,8 @@
 [Setup]
 AppId={{8F6D9A7E-CCR0-4E21-9B5E-CCREMOTE2026}}
 AppName=cc-remote
-AppVersion={#ProductVersion}
-AppVerName=cc-remote {#ProductVersion}
+AppVersion={#DistVersion}
+AppVerName=cc-remote {#DistVersion}
 AppPublisher=cc-remote native-pager
 AppComments=Self-hosted remote control for Claude Code / Codex
 DefaultDirName={localappdata}\cc-remote
@@ -50,10 +50,11 @@ SolidCompression=yes
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputName}
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
-CreateUninstallRegKey=no
-Uninstallable=no
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+CreateUninstallRegKey=yes
+Uninstallable=yes
+UninstallDisplayName=cc-remote {#DistVersion}
 DisableWelcomePage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -71,16 +72,31 @@ Source: "{#StageDir}\cc_portable_control\*"; DestDir: "{app}\release\cc_portable
 Source: "{#StageDir}\payload\*"; DestDir: "{app}\release\payload"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; Description: "Open cc-remote console"; Flags: postinstall nowait skipifsilent
+Filename: "powershell.exe"; Parameters: "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; Description: "Open cc-remote console"; Flags: postinstall nowait skipifsilent
 
 [Icons]
-Name: "{group}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
-Name: "{autodesktop}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
+Name: "{group}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
+Name: "{autodesktop}\cc-remote 控制台"; Filename: "powershell.exe"; Parameters: "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\release\cc_portable_control\windows\open-console.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"
+Name: "{group}\卸载 cc-remote"; Filename: "{uninstallexe}"
 
 [Code]
 var
   SetupFailed: Boolean;
   SetupFailureMessage: String;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+  Succeeded: Boolean;
+begin
+  if CurUninstallStep <> usUninstall then exit;
+  Succeeded := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    ExpandConstant('-NoProfile -ExecutionPolicy Bypass -File "{app}\release\cc_portable_control\windows\uninstall.ps1" -InstallRoot "{app}"'),
+    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if Succeeded then Succeeded := ResultCode = 0;
+  if not Succeeded then
+    RaiseException('Unable to stop or remove cc-remote. Close the console and retry. Your configuration has been kept.');
+end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
@@ -90,6 +106,9 @@ var
 begin
   if CurStep <> ssPostInstall then
     exit;
+
+  WizardForm.StatusLabel.Caption := 'Preparing CC Remote and its offline runtime...';
+  WizardForm.FilenameLabel.Caption := 'Please wait. No Python installation or manual configuration is needed.';
 
   { Run the real transactional installer ourselves so a non-zero child exit
     aborts Setup. A plain [Run] entry records the child failure in its log but

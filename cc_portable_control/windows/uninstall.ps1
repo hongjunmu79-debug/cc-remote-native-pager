@@ -49,6 +49,27 @@ function Write-Step { param([string]$Message) Write-Host "[cc-remote] $Message" 
 
 if (-not $InstallRoot) { $InstallRoot = Join-Path $env:LOCALAPPDATA "cc-remote" }
 $installRootFull = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+if ($installRootFull -eq [IO.Path]::GetPathRoot($installRootFull).TrimEnd('\') -or
+    $installRootFull -eq $env:USERPROFILE -or
+    -not (Test-Path -LiteralPath (Join-Path $installRootFull 'release\setup.ps1'))) {
+    throw "refusing uninstall outside a verified cc-remote installation"
+}
+
+function Remove-OwnedDirectory([string]$Directory) {
+    $full = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    if (-not $full.StartsWith($installRootFull + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "refusing removal outside installation: $full"
+    }
+    if (Test-Path -LiteralPath $full) {
+        $item = Get-Item -LiteralPath $full -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            # Never recurse through a junction into another tree.
+            [IO.Directory]::Delete($full)
+        } else {
+            Remove-Item -LiteralPath $full -Recurse -Force -Confirm:$false
+        }
+    }
+}
 if (-not (Test-Path $installRootFull)) {
     Write-Step "Install root $installRootFull does not exist; nothing to do"
     exit 0
@@ -184,21 +205,23 @@ if ($Rollback) {
 # --- Default: real uninstall ---------------------------------------------------
 Write-Step "Removing the current release ($activeVersion)"
 foreach ($taskName in @("cc-remote-relay", "cc-remote-wrapper")) {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($task -and (($task.Actions.Arguments -join ' ').Contains('"' + $installRootFull + '"'))) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
 }
-if (Test-Path $currentLink) { Remove-Item -Path $currentLink -Force -Confirm:$false -ErrorAction SilentlyContinue }
-if ($activeDir -and (Split-Path $activeDir -Leaf) -and (Test-Path $activeDir)) {
-    Remove-Item -Recurse -Force -Confirm:$false $activeDir
-}
+Remove-OwnedDirectory $currentLink
+Remove-OwnedDirectory $releasesDir
+Remove-OwnedDirectory (Join-Path $installRootFull 'runtime')
 if (Test-Path $currentJson) { Remove-Item -Force -Confirm:$false $currentJson }
 Write-Step "Removed the current release"
 
 if ($Purge) {
     Write-Step "Purging config, state and logs (irreversible)"
     foreach ($dir in @("config", "state", "logs", "runtime")) {
-        Remove-Item -Recurse -Force -Confirm:$false (Join-Path $installRootFull $dir)
+        Remove-OwnedDirectory (Join-Path $installRootFull $dir)
     }
-    Remove-Item -Recurse -Force -Confirm:$false $installRootFull
+    # Inno removes its own tracked files; do not recursively erase the root.
     Write-Step "Removed $installRootFull entirely"
 } else {
     Write-Step "Kept config, state and logs under $installRootFull for reinstall"

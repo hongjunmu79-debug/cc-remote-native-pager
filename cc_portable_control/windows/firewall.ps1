@@ -36,6 +36,10 @@ Set-StrictMode -Version 2.0
 
 if (-not $InstallRoot) { $InstallRoot = Join-Path $env:LOCALAPPDATA "cc-remote" }
 
+if ($Remove -and -not (Get-NetFirewallRule -DisplayName "cc-remote-$Port" -ErrorAction SilentlyContinue)) {
+    exit 0
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 $isAdministrator = $principal.IsInRole(
@@ -44,7 +48,9 @@ $isAdministrator = $principal.IsInRole(
 if (-not $isAdministrator) {
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Port $Port -InstallRoot `"$InstallRoot`""
     if ($Remove) { $arguments += " -Remove" }
-    $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+    $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    $null = $elevated.Handle
+    $elevated.WaitForExit()
     exit $elevated.ExitCode
 }
 
@@ -54,7 +60,8 @@ $pythonPath = Join-Path $InstallRoot "runtime\.venv\Scripts\python.exe"
 if ($Remove) {
     $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     if ($existing) {
-        Remove-NetFirewallRule -DisplayName $ruleName
+        $owned = $existing | Get-NetFirewallApplicationFilter | Where-Object { $_.Program -eq $pythonPath }
+        if ($owned) { Remove-NetFirewallRule -DisplayName $ruleName }
         Write-Host "[cc-remote] removed firewall rule $ruleName"
     } else {
         Write-Host "[cc-remote] firewall rule $ruleName not present; nothing to remove"

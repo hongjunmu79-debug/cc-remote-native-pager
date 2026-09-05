@@ -121,6 +121,10 @@ $venvPython = Join-Path $venvDir "Scripts\python.exe"
 $currentJson = Join-Path $releasesDir "current.json"
 $envPath = Join-Path $configDir ".env"
 
+if ($installRootFull -eq [IO.Path]::GetPathRoot($installRootFull).TrimEnd('\') -or $installRootFull -eq $env:USERPROFILE) {
+    throw "choose a dedicated cc-remote installation directory"
+}
+
 foreach ($dir in @($configDir, $logsDir, $stateDir, $releasesDir, $runtimeDir)) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 }
@@ -160,6 +164,29 @@ function Set-VenvHome {
     )
 }
 
+function Expand-RuntimeBundle([string]$Archive, [string]$Destination) {
+    # Avoid Expand-Archive's per-file PowerShell overhead on first install.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $destinationFull = [IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
+    $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+    try {
+        foreach ($entry in $zip.Entries) {
+            $entryPath = [IO.Path]::GetFullPath((Join-Path $destinationFull $entry.FullName))
+            if (-not $entryPath.StartsWith($destinationFull, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "unsafe runtime archive entry"
+            }
+        }
+        foreach ($entry in $zip.Entries) {
+            $entryPath = Join-Path $destinationFull $entry.FullName
+            if (-not $entry.Name) { [IO.Directory]::CreateDirectory($entryPath) | Out-Null }
+            else {
+                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($entryPath)) | Out-Null
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entryPath, $true)
+            }
+        }
+    } finally { $zip.Dispose() }
+}
+
 $bootstrapRuntime = $null
 $bootstrapPython = $null
 if ((-not (Test-Path $venvPython)) -and (Test-Path $runtimeBundle)) {
@@ -180,9 +207,10 @@ if ((-not (Test-Path $venvPython)) -and (Test-Path $runtimeBundle)) {
     if ($actualRuntimeHash -ne $expectedRuntimeHash) {
         throw "runtime-bundle.zip failed manifest verification"
     }
-    $bootstrapRuntime = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-remote-bootstrap-" + [guid]::NewGuid().ToString("N"))
+    $bootstrapRuntime = Join-Path $runtimeDir ("cc-remote-bootstrap-" + [guid]::NewGuid().ToString("N"))
     try {
-        Expand-Archive -LiteralPath $runtimeBundle -DestinationPath $bootstrapRuntime -Force
+        Write-Step "Preparing the offline runtime (no downloads required)"
+        Expand-RuntimeBundle $runtimeBundle $bootstrapRuntime
         $bootstrapPython = Join-Path $bootstrapRuntime "python\python.exe"
         if (-not (Test-Path $bootstrapPython)) {
             throw "runtime-bundle.zip has no bundled Python"
@@ -223,7 +251,7 @@ $smoke = Join-Path $PSScriptRoot "win_smoke.py"
 if (-not (Test-Path $smoke)) { throw "win_smoke.py not found next to install.ps1" }
 $verifyArgs = @($smoke, "--check", $payload)
 $verifyCode = Invoke-HostPython $verifyArgs
-if ($bootstrapRuntime -and (Test-Path $bootstrapRuntime)) {
+if ($verifyCode -ne 0 -and $bootstrapRuntime -and (Test-Path $bootstrapRuntime)) {
     Remove-Item -LiteralPath $bootstrapRuntime -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
 }
 if ($verifyCode -ne 0) {
@@ -231,14 +259,37 @@ if ($verifyCode -ne 0) {
 }
 $manifest = Get-Content (Join-Path $payload "distribution-manifest.json") -Raw | ConvertFrom-Json
 $distributionVersion = $manifest.distribution_version
+if ($distributionVersion -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or $distributionVersion -in @('.', '..', 'current')) {
+    throw "invalid distribution version path"
+}
 Write-Step "Payload verified: cc-remote v$($manifest.product_version) (protocol v$($manifest.protocol)) distribution $distributionVersion"
+
+if (Test-Path -LiteralPath $envPath) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "stop.ps1") -InstallRoot $installRootFull | Out-Null
+}
 
 # --- 2. Bootstrap / re-sync the runtime venv --------------------------------
 Write-Step "Bootstrapping runtime venv with uv $($uvExe)"
 $usedBundledVenv = $false
 if (-not (Test-Path $venvPython)) {
-    if (Test-Path $runtimeBundle) {
-        Expand-Archive -LiteralPath $runtimeBundle -DestinationPath $runtimeDir -Force
+    if ($bootstrapRuntime -and (Test-Path -LiteralPath $bootstrapRuntime)) {
+        # The verified extraction is the runtime. Move it once instead of
+        # deleting thousands of files and extracting the same archive again.
+        foreach ($part in @('python', '.venv')) {
+            $from = [IO.Path]::GetFullPath((Join-Path $bootstrapRuntime $part))
+            $to = [IO.Path]::GetFullPath((Join-Path $runtimeDir $part))
+            if (-not $from.StartsWith($bootstrapRuntime + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                -not $to.StartsWith($runtimeDir + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw "invalid runtime move target"
+            }
+            if (Test-Path -LiteralPath $to) { throw "incomplete runtime at $to; remove the failed installation using its uninstaller before reinstalling" }
+            Move-Item -LiteralPath $from -Destination $to
+        }
+        [IO.Directory]::Delete($bootstrapRuntime)
+        $bundledPython = Join-Path $runtimeDir "python\python.exe"
+        $bundledVenv = $venvDir
+    } elseif (Test-Path $runtimeBundle) {
+        Expand-RuntimeBundle $runtimeBundle $runtimeDir
         $bundledPython = Join-Path $runtimeDir "python\python.exe"
         $bundledVenv = $venvDir
     }
@@ -291,7 +342,7 @@ New-Item -ItemType Junction -Path (Join-Path $releasesDir "current") -Target $re
 # ``packaging`` distribution is never shadowed by the app's sys.path.
 $sitePackages = Join-Path $venvDir "Lib\site-packages"
 New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
-Set-Content -Path (Join-Path $sitePackages "cc_remote_release.pth") -Value (Join-Path $releasesDir "current") -Encoding ascii
+[IO.File]::WriteAllText((Join-Path $sitePackages "cc_remote_release.pth"), ((Join-Path $releasesDir "current") + [Environment]::NewLine), (New-Object Text.UTF8Encoding($false)))
 
 # --- 4. Config: preserve on upgrade, first-run wizard on fresh install ------
 if (Test-Path $envPath) {

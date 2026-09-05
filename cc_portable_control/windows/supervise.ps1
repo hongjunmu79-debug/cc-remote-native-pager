@@ -80,10 +80,14 @@ function Write-Log {
 }
 
 function Invoke-SupervisedProcess {
-    # Run the real process as our foreground child so the Task Scheduler tree
-    # never loses a tracked process. All streams append to the same log.
-    & $venvPython -m $module *>> $logFile
-    return $LASTEXITCODE
+    # Native stderr (including ordinary Python INFO logs) must not become a
+    # terminating PowerShell 5.1 NativeCommandError under ErrorAction=Stop.
+    $child = Start-Process $venvPython -ArgumentList @('-m', $module) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logsDir "$Service.stdout.log") -RedirectStandardError (Join-Path $logsDir "$Service.stderr.log")
+    $null = $child.Handle
+    try {
+        $child.WaitForExit()
+        return $child.ExitCode
+    } finally { $child.Dispose() }
 }
 
 if (Test-Path $stopMarker) {

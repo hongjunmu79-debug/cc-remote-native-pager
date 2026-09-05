@@ -35,7 +35,7 @@ foreach ($service in @("relay", "wrapper")) {
 
 foreach ($taskName in @("cc-remote-relay", "cc-remote-wrapper")) {
     $task = Get-ScheduledTask -TaskName $taskName
-    if ($task) {
+    if ($task -and (($task.Actions.Arguments -join ' ').Contains('"' + $InstallRoot.TrimEnd('\') + '"'))) {
         Stop-ScheduledTask -TaskName $taskName
         Disable-ScheduledTask -TaskName $taskName
         Write-Host "[cc-remote] stopped and disabled scheduled task $taskName"
@@ -43,7 +43,7 @@ foreach ($taskName in @("cc-remote-relay", "cc-remote-wrapper")) {
 }
 
 # Stop any portable foreground processes that use this install's venv.
-$venvRoot = Join-Path $InstallRoot "runtime\.venv"
+$venvRoot = Join-Path $InstallRoot "runtime\.venv\"
 $stopped = @()
 Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | ForEach-Object {
     $cmdline = $_.CommandLine

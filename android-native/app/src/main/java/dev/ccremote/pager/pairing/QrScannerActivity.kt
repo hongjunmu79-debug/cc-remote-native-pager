@@ -45,7 +45,26 @@ class QrScannerActivity : ComponentActivity() {
     private val permission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) startCamera() else finish()
+        if (granted) startCamera() else statusText.text = "未开启相机权限，仍可从图片识别二维码。"
+    }
+
+    private val imagePicker = registerForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching { InputImage.fromFilePath(this, uri) }
+                .onSuccess { image ->
+                    scanner.process(image)
+                        .addOnSuccessListener { codes ->
+                            val raw = codes.firstNotNullOfOrNull { it.rawValue }
+                            if (raw == null || !acceptPayload(raw)) {
+                                statusText.text = getString(R.string.qr_scanner_invalid)
+                            }
+                        }
+                        .addOnFailureListener { statusText.text = "图片识别失败，请选择清晰的配对二维码。" }
+                }
+                .onFailure { statusText.text = "无法打开图片，请重新选择。" }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,6 +109,17 @@ class QrScannerActivity : ComponentActivity() {
             )
         }
         setContentView(root)
+        root.addView(
+            Button(this).apply {
+                text = "从图片识别二维码"
+                setOnClickListener { imagePicker.launch("image/*") }
+            },
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+            ).apply { bottomMargin = (116 * resources.displayMetrics.density).toInt() },
+        )
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.CAMERA,
@@ -105,7 +135,7 @@ class QrScannerActivity : ComponentActivity() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
             val provider = runCatching { providerFuture.get() }.getOrElse {
-                finish()
+                statusText.text = "相机不可用，请从图片识别二维码。"
                 return@addListener
             }
             val preview = Preview.Builder().build().also {
@@ -123,7 +153,7 @@ class QrScannerActivity : ComponentActivity() {
                     preview,
                     analysis,
                 )
-            }.onFailure { finish() }
+            }.onFailure { statusText.text = "相机不可用，请从图片识别二维码。" }
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -138,14 +168,7 @@ class QrScannerActivity : ComponentActivity() {
         scanner.process(image)
             .addOnSuccessListener { barcodes ->
                 val raw = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue }
-                if (raw != null && !accepted && ClientPairingPayload.parse(raw).isSuccess) {
-                    accepted = true
-                    setResult(
-                        Activity.RESULT_OK,
-                        Intent().putExtra(EXTRA_QR_PAYLOAD, raw),
-                    )
-                    finish()
-                } else if (raw != null && raw != lastRejectedRaw) {
+                if (raw != null && !acceptPayload(raw) && raw != lastRejectedRaw) {
                     lastRejectedRaw = raw
                     runOnUiThread {
                         statusText.text = getString(R.string.qr_scanner_invalid)
@@ -163,5 +186,13 @@ class QrScannerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_QR_PAYLOAD = "dev.ccremote.pager.QR_PAYLOAD"
+    }
+
+    private fun acceptPayload(raw: String): Boolean {
+        if (accepted || ClientPairingPayload.parse(raw).isFailure) return false
+        accepted = true
+        setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_QR_PAYLOAD, raw))
+        finish()
+        return true
     }
 }

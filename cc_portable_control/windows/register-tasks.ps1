@@ -32,10 +32,14 @@ if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) {
 }
 
 $supervise = Join-Path $PSScriptRoot "supervise.ps1"
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 foreach ($service in @("relay", "wrapper")) {
     $taskName = "cc-remote-$service"
-    $argument = "-NoProfile -ExecutionPolicy Bypass -File `"$supervise`" -Service $service -InstallRoot `"$installRootFull`""
+    $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existing -and -not (($existing.Actions.Arguments -join ' ').Contains('"' + $installRootFull + '"'))) {
+        throw "another installation owns $taskName; uninstall that installation first"
+    }
+    $argument = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$supervise`" -Service $service -InstallRoot `"$installRootFull`""
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited

@@ -359,7 +359,7 @@ private fun EmptyDashboard(
                 when {
                     !paired -> "无需输入 IP 或密码；二维码会自动配置安全会话。"
                     bridgeConnected -> "新建或恢复会话后，看板会自动更新。"
-                    else -> "已保存配对信息，正在自动重连。"
+                    else -> "正在自动重连。换网或配对过期时，打开电脑控制台显示新二维码，再点下方重新扫码。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -372,6 +372,8 @@ private fun EmptyDashboard(
                     Button(onClick = onOpenChat) { Text("打开聊天") }
                     OutlinedButton(onClick = onRefresh) { Text("重新同步") }
                 }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = onScanPairing) { Text("重新扫码连接电脑") }
             }
         }
     }
